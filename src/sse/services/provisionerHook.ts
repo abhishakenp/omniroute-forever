@@ -19,7 +19,7 @@
  *   → first key to arrive gets added, request retries with it
  */
 
-import { log } from "@/shared/utils/logger";
+import { logger as log } from "@/shared/utils/logger";
 
 const PROVISIONER_URL =
   (process.env.PROVISIONER_URL as string | undefined) ?? "http://localhost:20129";
