@@ -228,3 +228,4 @@ export default function A2APage() {
     </div>
   );
 }
+export const dynamic = 'force-dynamic';
