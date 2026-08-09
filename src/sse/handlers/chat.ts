@@ -106,6 +106,12 @@ import { isSubscriptionQuotaText } from "@omniroute/open-sse/services/quotaTextC
 import { resolveUseUpstream429BreakerHints } from "@/shared/utils/providerHints";
 import { getCircuitBreaker, isLocalStreamLifecycleError } from "../../shared/utils/circuitBreaker";
 import { markAccountExhaustedFrom429 } from "../../domain/quotaCache";
+import {
+  triggerProviderProvisioning,
+  triggerAllProvidersProvisioning,
+  waitForProviderProvisioning,
+  waitForAnyProvisioning,
+} from "../services/provisionerHook";
 import { RequestTelemetry, recordTelemetry } from "../../shared/utils/requestTelemetry";
 import { generateRequestId } from "../../shared/utils/requestId";
 import { logAuditEvent } from "../../lib/compliance/index";
@@ -901,6 +907,19 @@ async function handleChatImplementation(
       typeof (settings as any)?.globalFallbackModel === "string" &&
       (settings as any).globalFallbackModel.trim()
     ) {
+      // Reactive provisioning: the entire combo is exhausted.
+      // Trigger parallel provisioning for all providers in the background.
+      // Keys will stream into OmniRoute as they're created — by the time
+      // the global fallback also fails, new keys may already be available.
+      const comboProviders = (combo.targets || [])
+        .map((t: any) => t.provider)
+        .filter(Boolean);
+      if (comboProviders.length > 0) {
+        triggerAllProvidersProvisioning(comboProviders);
+      } else {
+        triggerAllProvidersProvisioning();
+      }
+
       const fallbackModel = (settings as any).globalFallbackModel.trim();
       log.info(
         "GLOBAL_FALLBACK",
@@ -1326,6 +1345,11 @@ async function handleSingleModelChat(
         !credentials.connectionId
       ) {
         if (credentials?.allRateLimited) {
+          // Reactive provisioning: trigger background account creation for this provider.
+          // Non-blocking — the provisioner streams new keys into OmniRoute as they arrive.
+          // By the time the cooldown retry fires, a new key may already be available.
+          triggerProviderProvisioning(provider);
+
           const retryDecision = getCooldownAwareRetryDecision({
             retryAfter: credentials.retryAfter,
             settings: retrySettings,
@@ -1366,6 +1390,34 @@ async function handleSingleModelChat(
           PROVIDER_BREAKER_FAILURE_STATUSES.has(breakerFailureStatus)
         ) {
           breaker._onFailure();
+        }
+
+        // Reactive provisioning: all connections for this provider are rate-limited.
+        // Before giving up, wait up to 60s for background provisioning to produce a new key.
+        // The provisioner adds keys directly to OmniRoute, so after waiting we can retry.
+        if (credentials?.allRateLimited) {
+          triggerProviderProvisioning(provider);
+          log.info(
+            "PROVISIONER_HOOK",
+            `${provider}/${model} all connections exhausted — waiting up to 60s for new key...`
+          );
+          const provisioned = await waitForProviderProvisioning(provider, 60_000);
+          if (provisioned) {
+            log.info(
+              "PROVISIONER_HOOK",
+              `${provider} provisioning completed — retrying with new key`
+            );
+            // Reset retry state and loop again — new key should now be available
+            requestRetryAttempt = 0;
+            requestRetryLastError = null;
+            requestRetryLastStatus = null;
+            requestRetryLastCooldownMs = 0;
+            continue requestAttemptLoop;
+          }
+          log.warn(
+            "PROVISIONER_HOOK",
+            `${provider} provisioning timed out — returning error`
+          );
         }
 
         const noCredsRes = handleNoCredentials(
@@ -1846,6 +1898,9 @@ async function handleSingleModelChat(
           shouldMarkAccountExhaustedFrom429(provider, model, passthroughModels, failureKind)
         ) {
           markAccountExhaustedFrom429(credentials.connectionId, provider);
+          // Reactive provisioning: this connection's quota is exhausted.
+          // Fire background provisioning so a new key is ready by next retry.
+          triggerProviderProvisioning(provider);
         }
       }
 
