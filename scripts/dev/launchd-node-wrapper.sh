@@ -16,16 +16,12 @@ set -u
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_DIR"
 
-NODE_CANDIDATES=(
-  "/opt/homebrew/opt/node/bin/node"
-  $(ls -t /opt/homebrew/Cellar/node/*/bin/node 2>/dev/null)
-  $(ls -t "$HOME"/.local/share/fnm/node-versions/*/installation/bin/node 2>/dev/null)
-)
-
 NODE_BIN=""
-for candidate in "${NODE_CANDIDATES[@]}"; do
-  if [ -x "$candidate" ] && "$candidate" --version >/dev/null 2>&1; then
-    NODE_BIN="$candidate"
+# Iterate newest-first over Cellar + fnm installs; safe against spaces in paths.
+for candidate in "/opt/homebrew/opt/node/bin/node"     $(ls -t /opt/homebrew/Cellar/node/*/bin/node 2>/dev/null | while IFS= read -r f; do printf '%q ' "$f"; done)     $(ls -t "$HOME"/.local/share/fnm/node-versions/*/installation/bin/node 2>/dev/null | while IFS= read -r f; do printf '%q ' "$f"; done); do
+  eval "cand=$candidate"
+  if [ -x "$cand" ] && "$cand" --version >/dev/null 2>&1; then
+    NODE_BIN="$cand"
     break
   fi
 done
