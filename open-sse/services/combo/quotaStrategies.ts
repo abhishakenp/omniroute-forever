@@ -35,6 +35,9 @@ import { getQuotaFetcher } from "../quotaPreflight.ts";
 import { getCircuitBreaker } from "../../../src/shared/utils/circuitBreaker";
 import { getCachedProviderConnections } from "../../../src/lib/db/readCache";
 import { MAX_RR_COUNTERS, rrCounters } from "./rrState.ts";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { homedir } from "node:os";
 import type { ResolvedComboTarget, IsModelAvailable } from "./types.ts";
 import {
   resolveResetAwareConfig,
@@ -54,14 +57,72 @@ const HEADROOM_SATURATION_FETCH_CONCURRENCY = 5;
 
 const MAX_RESET_AWARE_CACHE = 200;
 
-const resetAwareConnectionCache = new Map<
-  string,
-  { fetchedAt: number; connections: Array<Record<string, unknown>> }
->();
-const resetAwareQuotaCache = new Map<
-  string,
-  { fetchedAt: number; quota: unknown; refreshPromise: Promise<unknown> | null }
->();
+// Use globalThis to guarantee a single cache instance across turbopack chunks.
+// Without this, the prewarm (imported via @omniroute alias) and the request path
+// (imported via relative path) get separate Map instances, defeating the prewarm.
+const _g = globalThis as unknown as {
+  __resetAwareConnectionCache?: Map<
+    string,
+    { fetchedAt: number; connections: Array<Record<string, unknown>> }
+  >;
+  __resetAwareQuotaCache?: Map<
+    string,
+    { fetchedAt: number; quota: unknown; refreshPromise: Promise<unknown> | null }
+  >;
+};
+const resetAwareConnectionCache =
+  _g.__resetAwareConnectionCache ??
+  (_g.__resetAwareConnectionCache = new Map<
+    string,
+    { fetchedAt: number; connections: Array<Record<string, unknown>> }
+  >());
+const resetAwareQuotaCache =
+  _g.__resetAwareQuotaCache ??
+  (_g.__resetAwareQuotaCache = new Map<
+    string,
+    { fetchedAt: number; quota: unknown; refreshPromise: Promise<unknown> | null }
+  >());
+
+// ─── Disk persistence for resetAwareQuotaCache ───────────────────────────────
+// On startup we load the cache from disk so the first request doesn't pay the
+// 10+ second cost of 38 serialized OpenRouter quota fetches. Only the absolute
+// first-ever startup (no disk file) pays that cost. The background prewarm
+// refreshes both the in-memory map and the disk file.
+const QUOTA_CACHE_DIR = join(homedir(), ".omniroute", "cache");
+const QUOTA_CACHE_FILE = join(QUOTA_CACHE_DIR, "quota-cache.json");
+
+function loadQuotaCacheFromDisk(): void {
+  try {
+    if (!existsSync(QUOTA_CACHE_FILE)) return;
+    const raw = readFileSync(QUOTA_CACHE_FILE, "utf-8");
+    const data = JSON.parse(raw) as Record<string, { fetchedAt: number; quota: unknown }>;
+    for (const [key, entry] of Object.entries(data)) {
+      resetAwareQuotaCache.set(key, {
+        fetchedAt: entry.fetchedAt,
+        quota: entry.quota,
+        refreshPromise: null,
+      });
+    }
+    console.log(`[STARTUP] Loaded ${resetAwareQuotaCache.size} quota entries from disk cache`);
+  } catch (err) {
+    console.warn("[STARTUP] Failed to load quota cache from disk (non-fatal):", err);
+  }
+}
+
+function saveQuotaCacheToDisk(): void {
+  try {
+    if (!existsSync(QUOTA_CACHE_DIR)) mkdirSync(QUOTA_CACHE_DIR, { recursive: true });
+    const entries: Record<string, { fetchedAt: number; quota: unknown }> = {};
+    for (const [key, entry] of resetAwareQuotaCache) {
+      // Don't persist entries with active refresh promises
+      if (entry.refreshPromise !== null) continue;
+      entries[key] = { fetchedAt: entry.fetchedAt, quota: entry.quota };
+    }
+    writeFileSync(QUOTA_CACHE_FILE, JSON.stringify(entries));
+  } catch (err) {
+    console.warn("[STARTUP] Failed to save quota cache to disk (non-fatal):", err);
+  }
+}
 
 async function getQuotaAwareConnectionsForTarget(
   target: ResolvedComboTarget,
@@ -437,6 +498,86 @@ export async function fetchResetAwareQuotaWithCache({
   }
 
   return refresh();
+}
+
+/**
+ * Prewarm the reset-aware quota cache for all active connections that have a
+ * registered quota fetcher. Called at startup.
+ *
+ * Flow:
+ * 1. Load cached quota from disk (~/.omniroute/cache/quota-cache.json) into the
+ *    globalThis singleton map. This is synchronous and instant.
+ * 2. Fire background fetches for all connections to refresh the cache. The
+ *    throttle inside each fetcher serializes the actual HTTP calls.
+ * 3. After all fetches complete, persist the updated cache back to disk.
+ *
+ * Only the absolute first-ever startup (no disk file) pays the full fetch cost.
+ * Subsequent restarts load from disk instantly and refresh in the background.
+ */
+export async function prewarmQuotaCache(): Promise<void> {
+  // Step 1: Load from disk synchronously before any async work.
+  loadQuotaCacheFromDisk();
+
+  try {
+    const connections = (await getCachedProviderConnections({ isActive: true })) as Array<
+      Record<string, unknown>
+    >;
+    const byProvider = new Map<string, Array<Record<string, unknown>>>();
+    for (const conn of connections) {
+      const provider = typeof conn.provider === "string" ? conn.provider : null;
+      const id = typeof conn.id === "string" ? conn.id : null;
+      if (!provider || !id) continue;
+      if (!getQuotaFetcher(provider)) continue;
+      if (!byProvider.has(provider)) byProvider.set(provider, []);
+      byProvider.get(provider)!.push(conn);
+    }
+
+    const total = [...byProvider.values()].reduce((sum, conns) => sum + conns.length, 0);
+    if (total === 0) return;
+    console.log(
+      `[STARTUP] Prewarming quota cache for ${total} connection(s) across ${byProvider.size} provider(s)`
+    );
+
+    // Step 2: Fire background fetches to refresh the cache.
+    // Use a non-zero TTL so fetchResetAwareQuotaWithCache populates
+    // resetAwareQuotaCache (globalThis singleton). With TTL=0 the cache is
+    // bypassed and the fetcher's own module-level cache is used instead.
+    const config = {
+      ...resolveResetWindowConfig(null),
+      quotaCacheTtlMs: 300_000,
+      quotaCacheMaxStaleMs: 3_600_000,
+    };
+    const promises: Promise<unknown>[] = [];
+    for (const [provider, conns] of byProvider) {
+      const fetcher = getQuotaFetcher(provider)!;
+      for (const conn of conns) {
+        const id = conn.id as string;
+        promises.push(
+          fetchResetAwareQuotaWithCache({
+            provider,
+            connectionId: id,
+            connection: conn,
+            fetcher,
+            config,
+            log: {},
+            comboName: "__prewarm__",
+          }).catch(() => null)
+        );
+      }
+    }
+    // Batch with bounded concurrency (4) to prevent event-loop saturation.
+    // Previous: Promise.allSettled(90 concurrent upstream fetches) → CPU 100%.
+    const PREWARM_BATCH = 4;
+    for (let i = 0; i < promises.length; i += PREWARM_BATCH) {
+      await Promise.allSettled(promises.slice(i, i + PREWARM_BATCH));
+    }
+
+    // Step 3: Persist updated cache to disk for next startup.
+    saveQuotaCacheToDisk();
+    console.log(`[STARTUP] Quota cache prewarmed (${total} connections)`);
+  } catch (err) {
+    console.warn("[STARTUP] Quota cache prewarm failed (non-fatal):", err);
+  }
 }
 
 export type PreScreenResult = { profile: ProviderProfile | null; available: boolean };

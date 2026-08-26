@@ -218,10 +218,8 @@ export async function executeRuntimeUnitCombo(args: {
     for (let retry = 0; retry <= maxRetries; retry += 1) {
       if (args.signal?.aborted)
         return { response: errorResponse(499, "Client disconnected"), unit };
-      args.nesting.attemptBudget.count += 1;
-      if (args.nesting.attemptBudget.count > args.nesting.attemptBudget.limit) {
-        return { response: errorResponse(503, "Maximum combo retry limit reached"), unit };
-      }
+      // No global attempt limit — nested combo must try all targets across all
+      // providers before concluding exhaustion.
       if (retry > 0) {
         await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
       }

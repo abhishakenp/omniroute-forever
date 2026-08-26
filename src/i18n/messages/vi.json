@@ -2979,15 +2979,7 @@
     "copilotPasteInto": "Dán vào:",
     "copilotReloadInstruction": "Sau đó tải lại VS Code và nhập khóa API khi được yêu cầu.",
     "wireApiChatCompletions": "Chat Completions (/chat/completions)",
-    "wireApiResponses": "Responses API (/responses)",
-    "ccDiscoveryInfoButton": "Cách bật khám phá mô hình trong Claude Code",
-    "ccDiscoveryInfoTooltip": "Công bố các mô hình không phải Claude dưới dạng id phản chiếu claude/&lt;provider&gt;/&lt;model&gt; để tính năng khám phá mô hình qua gateway của Claude Code có thể liệt kê chúng. Khi bật ở phạm vi toàn cục, số mục trong danh mục tăng gấp đôi với mọi client.",
-    "ccDiscoveryInfoLink": "Mở Feature Flags",
-    "ccOnboardingTitle": "settings.json cho việc khám phá mô hình qua gateway",
-    "ccOnboardingCopy": "Sao chép",
-    "ccOnboardingCopied": "Đã sao chép",
-    "ccOnboardingKeyPlaceholder": "<khóa API OmniRoute của bạn>",
-    "ccOnboardingWindowNote": "Claude Code mặc định coi mọi id mô hình mà nó không nhận ra là có cửa sổ ngữ cảnh 200K. Với mô hình có cửa sổ thực tế khác, hãy thêm CLAUDE_CODE_AUTO_COMPACT_WINDOW ngay bên dưới để việc nén ngữ cảnh tự động không kích hoạt quá sớm."
+    "wireApiResponses": "Responses API (/responses)"
   },
   "combos": {
     "title": "Combo",
@@ -12424,10 +12416,14 @@
     "pollErrorLocalOnly": "Trang này chỉ có thể truy cập từ localhost hoặc LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Đã dừng thăm dò: máy chủ đã từ chối yêu cầu (404/403).",
     "pollErrorTransient": "Lỗi khi lấy dữ liệu: tự động thử lại.",
-    "degraded": "Dữ liệu một phần: nguồn không khả dụng: {sources}",
-    "degraded.source.database": "Cơ Sở Dữ Liệu",
-    "degraded.source.circuitBreaker": "Cầu Dao Mạch",
-    "degraded.source.modelLockouts": "Khóa Mô Hình",
-    "degraded.source.count": "Số Lượng Kết Nối"
+    "degraded": {
+      "label": "Dữ liệu một phần: nguồn không khả dụng: {sources}",
+      "source": {
+        "database": "Cơ Sở Dữ Liệu",
+        "circuitBreaker": "Cầu Dao Mạch",
+        "modelLockouts": "Khóa Mô Hình",
+        "count": "Số Lượng Kết Nối"
+      }
+    }
   }
 }

@@ -397,8 +397,10 @@ export const REGISTRY: Record<string, RegistryEntry> = {
   "kilo-gateway": kilo_gatewayProvider,
   "bailian-coding-plan": bailian_coding_planProvider,
   gigachat: gigachatProvider,
-  "devin-cli": devin_cliProvider,
-  "devin-cli-agentic": devin_cli_agenticProvider,
+  // Devin CLI providers disabled — ACP/summarizer protocol is incompatible with
+  // OpenAI tool calling. Re-enable only if a native function-calling adapter is built.
+  // "devin-cli": devin_cliProvider,
+  // "devin-cli-agentic": devin_cli_agenticProvider,
   auggie: auggieProvider,
   chutes: chutesProvider,
   chenzk: chenzkProvider,

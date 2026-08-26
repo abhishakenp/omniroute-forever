@@ -165,7 +165,10 @@ export const ERROR_RULES: ErrorRule[] = [
   { id: "overloaded", text: "overloaded", backoff: true, reason: "model_capacity" },
   { id: "high_demand", text: "high demand", backoff: true, reason: "model_capacity" },
   { id: "status_401", status: 401, cooldownMs: 0, reason: "auth_error" },
-  { id: "status_402", status: 402, cooldownMs: 0, reason: "quota_exhausted" },
+  // 402 = payment required / credits exhausted — terminal until credentials change.
+  // Zero cooldown means the same broke provider is retried on every request (#fix-402).
+  // Use 1h cooldown (matches COOLDOWN_MS.paymentRequired fallback in accountFallback.ts).
+  { id: "status_402", status: 402, cooldownMs: 60 * 60 * 1000, reason: "quota_exhausted" },
   { id: "status_403", status: 403, cooldownMs: 0, reason: "quota_exhausted" },
   { id: "status_404", status: 404, cooldownMs: COOLDOWN_MS.notFound, reason: "unknown" },
   { id: "status_406", status: 406, backoff: true, reason: "server_error" },

@@ -32,6 +32,12 @@ export interface EmergencyFallbackConfig {
   /** Skip fallback for tool requests (gpt-oss-120b may not support structured tool calling) */
   skipForToolRequests: boolean;
   maxOutputTokens: number;
+  /** GAP 5 FIX: Tool-capable fallback for when skipForToolRequests=true blocks tool requests.
+   *  Uses groq/llama-3.3-70b-versatile — free, verified tool-calling, fast.
+   *  When the primary fallback skips tool requests, this secondary fallback catches them. */
+  toolCapableProvider?: string;
+  toolCapableModel?: string;
+  toolCapableMaxOutputTokens?: number;
 }
 
 export const EMERGENCY_FALLBACK_CONFIG: EmergencyFallbackConfig = {
@@ -59,6 +65,10 @@ export const EMERGENCY_FALLBACK_CONFIG: EmergencyFallbackConfig = {
   ],
   skipForToolRequests: true,
   maxOutputTokens: 4096,
+  // GAP 5: Tool-capable fallback — groq/llama-3.3-70b-versatile is free + supports tools
+  toolCapableProvider: "groq",
+  toolCapableModel: "llama-3.3-70b-versatile",
+  toolCapableMaxOutputTokens: 8192,
 };
 
 export interface FallbackDecision {
@@ -129,32 +139,46 @@ export function shouldUseFallback(
       reason: "emergency fallback disabled via OMNIROUTE_EMERGENCY_FALLBACK",
     };
   }
-  if (config.skipForToolRequests && requestHasTools) {
-    return { shouldFallback: false, reason: "skipped: request has tools" };
-  }
-  if (config.triggerOn402 && status === 402) {
-    return {
-      shouldFallback: true,
-      reason: `HTTP 402 → emergency fallback to ${config.provider}/${config.model}`,
-      provider: config.provider,
-      model: config.model,
-      maxOutputTokens: config.maxOutputTokens,
-    };
-  }
+
+  // Check if this is a budget/quota error
+  const is402 = config.triggerOn402 && status === 402;
+  let matchedKeyword: string | null = null;
   if (config.triggerOnBudgetKeywords && errorBody) {
     const lowerBody = errorBody.toLowerCase();
-    const matched = config.budgetKeywords.find((kw) => lowerBody.includes(kw.toLowerCase()));
-    if (matched) {
+    matchedKeyword =
+      config.budgetKeywords.find((kw) => lowerBody.includes(kw.toLowerCase())) ?? null;
+  }
+  const isBudgetError = is402 || matchedKeyword !== null;
+
+  if (!isBudgetError) {
+    return { shouldFallback: false, reason: "no budget error detected" };
+  }
+
+  // GAP 5: If request has tools and primary fallback skips tools, use tool-capable fallback
+  if (config.skipForToolRequests && requestHasTools) {
+    if (config.toolCapableProvider && config.toolCapableModel) {
       return {
         shouldFallback: true,
-        reason: `Budget error detected ('${matched}') → emergency fallback to ${config.provider}/${config.model}`,
-        provider: config.provider,
-        model: config.model,
-        maxOutputTokens: config.maxOutputTokens,
+        reason: `Budget error (${is402 ? "HTTP 402" : `'${matchedKeyword}'`}) → tool-capable fallback to ${config.toolCapableProvider}/${config.toolCapableModel}`,
+        provider: config.toolCapableProvider,
+        model: config.toolCapableModel,
+        maxOutputTokens: config.toolCapableMaxOutputTokens ?? 4096,
       };
     }
+    return {
+      shouldFallback: false,
+      reason: "skipped: request has tools and no tool-capable fallback configured",
+    };
   }
-  return { shouldFallback: false, reason: "no budget error detected" };
+
+  // Standard fallback (no tools, or skipForToolRequests=false)
+  return {
+    shouldFallback: true,
+    reason: `Budget error (${is402 ? "HTTP 402" : `'${matchedKeyword}'`}) → emergency fallback to ${config.provider}/${config.model}`,
+    provider: config.provider,
+    model: config.model,
+    maxOutputTokens: config.maxOutputTokens,
+  };
 }
 
 export function isFallbackDecision(result: FallbackResult): result is FallbackDecision {

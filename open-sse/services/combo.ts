@@ -138,11 +138,14 @@ import {
   computeClosestRetryAfter,
   waitForCooldownAwareRetry,
 } from "../../src/sse/services/cooldownAwareRetry.ts";
+import {
+  triggerProviderProvisioning,
+  waitForAnyProvisioning,
+} from "../../src/sse/services/provisionerHook.ts";
 import { dispatchChaosFromCombo, type ChaosTuning } from "./autoCombo/chaosEngine.ts";
 import {
   TRANSIENT_FOR_SEMAPHORE,
   MAX_FALLBACK_WAIT_MS,
-  MAX_GLOBAL_ATTEMPTS,
   isAllAccountsRateLimitedResponse,
   clampComboDepth,
   shouldSkipForPredictedTtft,
@@ -212,13 +215,66 @@ import {
   calculateResetWindowAffinity,
   type ResetWindowConfig,
 } from "./combo/quotaScoring.ts";
-import { fetchResetAwareQuotaWithCache, preScreenTargets } from "./combo/quotaStrategies.ts";
+import {
+  fetchResetAwareQuotaWithCache,
+  preScreenTargets,
+  prewarmQuotaCache,
+} from "./combo/quotaStrategies.ts";
+export { prewarmQuotaCache };
 import {
   buildAutoQuotaThresholds,
   resolveQuotaExhaustionCutoffForTarget,
 } from "./combo/quotaExhaustionCutoff.ts";
 import { expandTargetsByFingerprints } from "./combo/fingerprintExpansion.ts";
 import { resolveComboTargetPipeline } from "./combo/targetResolution.ts";
+import {
+  startProbePhase,
+  reorderByProbeResults,
+  invalidateProbeCache,
+} from "./combo/probePhase.ts";
+
+// ─── Recently-succeeded model cache ──────────────────────────────────────────
+// Records which models succeeded recently (cross-request, 120s TTL).
+// When ordering targets, recently-succeeded models go FIRST — skipping the
+// probe entirely and avoiding 1000+ fallbacks through dead models.
+const recentlySucceededModels = new Map<string, number>(); // modelStr → timestamp
+const RECENT_SUCCESS_TTL_MS = 1_800_000; // 30 minutes (was 2 min — cache expired between peer ticks)
+
+/** Record a model success so future requests try it first. */
+function recordModelSuccess(modelStr: string): void {
+  recentlySucceededModels.set(modelStr, Date.now());
+  // Prune expired entries occasionally (higher threshold for 30min TTL)
+  if (recentlySucceededModels.size > 200) {
+    const now = Date.now();
+    for (const [k, t] of recentlySucceededModels) {
+      if (now - t > RECENT_SUCCESS_TTL_MS) recentlySucceededModels.delete(k);
+    }
+  }
+}
+
+/** Get recently-succeeded models (within TTL). Returns a Set of modelStrs. */
+function getRecentlySucceededModels(): Set<string> {
+  const now = Date.now();
+  const result = new Set<string>();
+  for (const [k, t] of recentlySucceededModels) {
+    if (now - t <= RECENT_SUCCESS_TTL_MS) result.add(k);
+  }
+  return result;
+}
+
+/** Reorder targets to put recently-succeeded models first. */
+function reorderTargetsByRecentSuccess<T extends { modelStr: string }>(targets: T[]): T[] {
+  const succeeded = getRecentlySucceededModels();
+  if (succeeded.size === 0) return targets;
+  const recent: T[] = [];
+  const rest: T[] = [];
+  for (const t of targets) {
+    if (succeeded.has(t.modelStr)) recent.push(t);
+    else rest.push(t);
+  }
+  if (recent.length === 0) return targets;
+  return [...recent, ...rest];
+}
 
 export { RESET_WINDOW_NAMES, QUOTA_SOFT_DEPRIORITIZE_FACTOR, setCandidateQuotaSoftPenalty };
 export { scoreAutoTargets, expandAutoComboCandidatePool };
@@ -258,6 +314,53 @@ export {
  * peekStickyConnectionId guards against clearing an unrelated pin when the
  * failing target isn't actually the currently sticky-bound connection.
  */
+
+/**
+ * Detect deterministic parameter validation failures — errors where the same
+ * model will reject every key/account identically. These should skip all
+ * remaining targets with the same modelStr, not burn attempts one key at a time.
+ *
+ * Matches:
+ * - 422: "reasoning_effort 'medium' not supported", "unsupported parameter"
+ * - 400: "reasoning_effort low is not supported for this model"
+ * - 400: "max tokens must be less than or equal to N"
+ * - 400: "too many tokens: max tokens must be less than"
+ * - 400: "Model 'X' is not available in the active live catalog" (model access denied)
+ * - 400: "model not found" / "invalid model" (model doesn't exist)
+ *
+ * Does NOT match:
+ * - Context overflow ("input is too long") — handled separately by isContextOverflow400
+ * - Rate limit text on 400 ("too many requests") — NOT deterministic
+ */
+const DETERMINISTIC_PARAM_PATTERNS = [
+  /reasoning_effort.*not supported/i,
+  /reasoning_effort.*not enabled/i,
+  /reasoning_effort.*invalid/i,
+  /reasoning_effort.*not valid/i,
+  /reasoning.*not supported.*model/i,
+  /reasoning.*not enabled.*model/i,
+  /unsupported.*parameter/i,
+  /parameter.*not supported/i,
+  /parameter.*not enabled/i,
+  /max.?tokens.*must be/i,
+  /max.?tokens.*exceed/i,
+  /max.?tokens.*less than/i,
+  /max.?tokens.*too large/i,
+  /max.?tokens.*illegal/i,
+  /max.?tokens.*range/i,
+  /too many tokens.*max/i,
+  // Model access denied — deterministic: every key gets the same "not available"
+  /model.*not.*available.*catalog/i,
+  /model.*not.*found/i,
+  /invalid model/i,
+  /model.*does not exist/i,
+  /model.*not.*supported/i,
+];
+function isDeterministicParamFailure(errorText: string | null | undefined): boolean {
+  if (!errorText) return false;
+  return DETERMINISTIC_PARAM_PATTERNS.some((p) => p.test(errorText));
+}
+
 export function releaseStickyPinOnFailure(
   messageHash: string | null | undefined,
   failedConnectionId: string | null | undefined
@@ -728,6 +831,18 @@ export async function handleComboChat({
   const _sticky = targetResolution.sticky;
   let orderedTargets = targetResolution.orderedTargets;
 
+  // Put recently-succeeded models first — avoids 1000+ fallbacks through dead
+  // models when we already know which providers are alive (cross-request cache).
+  const recentSuccessCount = getRecentlySucceededModels().size;
+  if (recentSuccessCount > 0) {
+    const before = orderedTargets.length;
+    orderedTargets = reorderTargetsByRecentSuccess(orderedTargets);
+    log.info(
+      "COMBO",
+      `Reordered targets: ${recentSuccessCount} recently-succeeded models first (of ${before} total)`
+    );
+  }
+
   // #5923 (Finding #4) — reset-window config for the shared per-target quota-
   // exhaustion cutoff below. The "auto" strategy already applies its own cutoff
   // via buildAutoCandidates/routableCandidates, so this only affects the other
@@ -774,17 +889,13 @@ export async function handleComboChat({
   // We snapshot them now so cleanup can happen after the attempt loop finishes.
   const _registeredExecutionKeys = orderedTargets.map((t) => t.executionKey).filter(Boolean);
 
-  let globalAttempts = 0;
-
   // Cooldown-aware retry (Variante A). Originally quota-share (qtSd/) only;
   // extended to "auto" combos too (#7360 — a 2-model "default" auto combo
   // hitting Gemini TPM/RPM on both targets was crystallizing a 503 "all
   // targets exhausted" after ~6s instead of waiting out the ~60s TPM window):
   // when the set loop would crystallize a 429 model_cooldown because the
   // target hit a SHORT transient cooldown, we wait it out and re-run the
-  // whole set loop instead of propagating the 429. `globalAttempts` persists
-  // across these waits so MAX_GLOBAL_ATTEMPTS still bounds total work. The
-  // wait happens at the crystallization point. The only semaphore slot the
+  // whole set loop instead of propagating the 429. The only semaphore slot the
   // quota-share path may hold is the FASE 2.1 per-connection concurrency slot
   // (acquired once around dispatchWithCooldownRetry below); it is intentionally
   // kept across the wait so the account stays "busy", and is released by the
@@ -900,6 +1011,10 @@ export async function handleComboChat({
       let anySuccess = false;
       const abortControllers = new Map<number, AbortController>();
       const zeroLatencyOptimizationsEnabled = config.zeroLatencyOptimizationsEnabled === true;
+      // #9871: Track models that returned deterministic non-transient errors (e.g. 422
+      // unsupported parameter). All remaining targets with the same modelStr are skipped
+      // to avoid burning MAX_GLOBAL_ATTEMPTS on keys that will fail identically.
+      const failedModelSet = new Set<string>();
 
       const executeTarget = async (
         i: number
@@ -912,6 +1027,15 @@ export async function handleComboChat({
         const cb = getCircuitBreaker(provider);
         if (cb.getStatus().state === "OPEN") {
           log.info("COMBO", `Skipping ${modelStr} — circuit breaker OPEN for ${provider}`);
+          if (i > 0) fallbackCount++;
+          return null;
+        }
+
+        // #9871: Skip targets whose model already returned a deterministic non-transient
+        // error (e.g. 422 unsupported parameter). Every key/account for this model will
+        // fail identically — don't waste attempts.
+        if (failedModelSet.has(modelStr)) {
+          log.info("COMBO", `Skipping ${modelStr} — model in deterministic-failure skip set`);
           if (i > 0) fallbackCount++;
           return null;
         }
@@ -1036,34 +1160,11 @@ export async function handleComboChat({
             log.info("COMBO", `Client disconnected — aborting combo loop before model ${modelStr}`);
             return { ok: false, response: errorResponse(499, "Client disconnected") };
           }
-          globalAttempts++;
-          if (globalAttempts > MAX_GLOBAL_ATTEMPTS) {
-            log.warn(
-              "COMBO",
-              `Maximum combo attempts (${MAX_GLOBAL_ATTEMPTS}) exceeded across all targets and fallbacks. Terminating loop to prevent runaway background requests.`
-            );
-            // Actionable failure instead of an opaque 503 when every candidate
-            // failed the same recoverable way. If the dominant cause was reasoning
-            // models exhausting a too-small max_tokens budget (no content output),
-            // retrying other models can't help — tell the caller to raise max_tokens.
-            // Silent-stop fix: bump the consecutive-failure counter for this session-combo pair
-            // so the pin gets cleared on the 3rd attempt (recovery.next_step tells the client).
-            const reasoningExhausted = /reasoning consumed \d+\/\d+ tokens/.test(lastError || "");
-            const failureReason = reasoningExhausted
-              ? "reasoning_budget_exhausted"
-              : "max_attempts_exceeded";
-            recordComboFailure(effectiveSessionId, combo.name);
-            return {
-              ok: false,
-              response: errorResponseWithComboDiagnostics(
-                503,
-                reasoningExhausted
-                  ? "All combo candidates exhausted their token budget on reasoning without producing content. Increase max_tokens — reasoning models need a larger budget to emit content."
-                  : "Maximum combo retry limit reached",
-                buildComboDiag(failureReason)
-              ),
-            };
-          }
+          // No global attempt limit — the combo must try ALL targets across ALL
+          // providers before concluding exhaustion. Per-provider provisioning is
+          // triggered non-blocking when a provider's keys are exhausted (below),
+          // and the combo moves to the next provider immediately. Only when ALL
+          // providers are exhausted does the combo wait for provisioning to resolve.
           // Predictive TTFT Circuit Breaker (skip slow models)
           if (
             zeroLatencyOptimizationsEnabled &&
@@ -1472,6 +1573,8 @@ export async function handleComboChat({
               })();
             }
 
+            log.info("COMBO", `✓ model ${modelStr} succeeded (status=${result.status})`);
+            recordModelSuccess(modelStr);
             return { ok: true, response: result };
           }
 
@@ -1625,6 +1728,86 @@ export async function handleComboChat({
             if (i > 0) fallbackCount++;
             return { ok: false, response: result };
           }
+          // #9871: Non-transient 422 (e.g. unsupported parameter like reasoning_effort)
+          // and 400 param validation errors (reasoning_effort not supported, max_tokens
+          // too large) are deterministic for the same model — every key/account will
+          // get the same error. Skip all remaining targets with the same modelStr
+          // instead of burning attempts one key at a time.
+          const isDeterministicParamError =
+            (result.status === 422 || result.status === 400) &&
+            isDeterministicParamFailure(errorText);
+
+          // PROACTIVE STRIP + RETRY: If the error is reasoning_effort-related,
+          // retry the SAME model immediately with reasoning_effort stripped.
+          // This avoids falling through 100+ models when the only issue is a
+          // unsupported parameter that can be simply removed.
+          if (
+            isDeterministicParamError &&
+            errorText &&
+            /reasoning_effort/i.test(errorText) &&
+            attemptBody &&
+            typeof attemptBody === "object" &&
+            (attemptBody as Record<string, unknown>).reasoning_effort !== undefined &&
+            !(attemptBody as Record<string, unknown>)._reasoningStripped
+          ) {
+            const strippedBody = { ...(attemptBody as Record<string, unknown>) };
+            delete strippedBody.reasoning_effort;
+            delete strippedBody.thinking;
+            strippedBody._reasoningStripped = true;
+            log.info(
+              "COMBO",
+              `Retrying ${modelStr} with reasoning_effort stripped (was: ${errorText.slice(0, 80)})`
+            );
+            const retryResult = await handleSingleModelWithTimeout(
+              strippedBody as Record<string, unknown>,
+              modelStr,
+              {
+                ...targetForAttempt,
+                effectiveComboStrategy: strategy,
+                failoverBeforeRetry: config.failoverBeforeRetry,
+              }
+            );
+            if (retryResult.ok) {
+              const selectedConnectionId =
+                retryResult.headers?.get("X-OmniRoute-Selected-Connection-Id") ||
+                retryResult.headers?.get("x-omniroute-selected-connection-id") ||
+                undefined;
+              const effectiveConnectionId = selectedConnectionId || target.connectionId || "";
+              const latencyMs = Date.now() - startTime;
+              log.info(
+                "COMBO",
+                `✓ model ${modelStr} succeeded after reasoning strip (${latencyMs}ms, ${fallbackCount} fallbacks)`
+              );
+              recordModelSuccess(modelStr);
+              recordComboRequest(combo.name, modelStr, {
+                success: true,
+                latencyMs,
+                fallbackCount,
+                strategy,
+                target: toRecordedTarget(target),
+              });
+              if (provider && provider !== "unknown") {
+                recordProviderSuccess(provider, effectiveConnectionId || undefined);
+              }
+              return { ok: true, response: retryResult };
+            }
+            // Strip retry also failed — fall through to normal skip logic
+            log.info("COMBO", `Strip retry also failed for ${modelStr} — skipping`);
+          }
+
+          if (
+            isDeterministicParamError &&
+            !transientRateLimitedProviders.has(provider) &&
+            remainingTargets.some((t) => t.modelStr === modelStr)
+          ) {
+            const skipCount = remainingTargets.filter((t) => t.modelStr === modelStr).length;
+            log.warn(
+              "COMBO",
+              `Non-transient ${result.status} param error from ${modelStr} — skipping ${skipCount} remaining targets with same model (deterministic failure): ${errorText?.slice(0, 80)}`
+            );
+            // Mark model as failed so the executeTarget loop skips remaining same-model targets
+            failedModelSet.add(modelStr);
+          }
           const fallbackResult = checkFallbackError(
             result.status,
             errorText,
@@ -1682,6 +1865,16 @@ export async function handleComboChat({
           // exhausted — if it's the currently sticky-bound one, release the pin now
           // rather than waiting for the next turn's lazy headroom/status recheck.
           releaseStickyPinOnFailure(_sticky.messageHash, targetWithConnection.connectionId);
+
+          // Reactive provisioning: fire as soon as a provider's keys are exhausted,
+          // not after the whole combo fails. Non-blocking — runs in background.
+          if (providerExhausted && provider && provider !== "unknown") {
+            log.info(
+              "PROVISIONER_HOOK",
+              `Combo "${combo.name}" provider ${provider} exhausted — triggering provisioning`
+            );
+            triggerProviderProvisioning(provider);
+          }
 
           // #2101: Prevent infinite fallback loops with 400 Bad Request errors that are genuinely
           // body-specific (malformed JSON, bad format, missing required fields).
@@ -1765,6 +1958,10 @@ export async function handleComboChat({
             !isStreamReadinessFailure &&
             !isTokenLimitBreach &&
             [408, 429, 500, 502, 503, 504].includes(result.status);
+          log.warn(
+            "COMBO",
+            `Model ${modelStr} failed (status=${result.status}, retry=${retry}/${maxRetries}, transient=${isTransient}, providerExhausted=${providerExhausted}): ${(errorText || "").slice(0, 200)}`
+          );
           if (retry < maxRetries && isTransient && !providerExhausted) {
             if (
               provider &&
@@ -1825,6 +2022,10 @@ export async function handleComboChat({
               if (i > 0) fallbackCount++;
               return null;
             }
+            log.info(
+              "COMBO",
+              `Retrying ${modelStr} (transient, attempt ${retry + 2}/${maxRetries + 1}) after ${retryDelayMs}ms`
+            );
             continue; // Retry same model (transient error, no lockout recorded)
           }
 
@@ -1917,10 +2118,88 @@ export async function handleComboChat({
             }
           }
 
+          // ── Apply probe results on first failure ───────────────────────────
+          // If the probe has completed by now (and hasn't been applied yet),
+          // reorder the REMAINING targets so alive providers are tried first.
+          // This is the key optimization: the first attempt runs without delay,
+          // and only on failure do we use probe results to skip dead providers.
+          if (probePromise && !probeApplied && i === 0) {
+            const probeResult = await probePromise;
+            if (probeResult) {
+              for (const model of probeResult.paramErrorModels) failedModelSet.add(model);
+              for (const provider of probeResult.rateLimitedProviders) {
+                log.info(
+                  "PROVISIONER_HOOK",
+                  `Probe: provider ${provider} rate-limited — triggering background provisioning`
+                );
+                triggerProviderProvisioning(provider);
+              }
+              // Reorder remaining targets (i+1 onward) — alive first
+              const remaining = orderedTargets.slice(i + 1);
+              const reordered = reorderByProbeResults(remaining, probeResult);
+              orderedTargets = [...orderedTargets.slice(0, i + 1), ...reordered];
+              log.info(
+                "COMBO-PROBE",
+                `Applied probe results after first failure — reordered ${reordered.length} remaining targets (${probeResult.verifiedAliveModels.size} alive first)`
+              );
+            }
+            probeApplied = true;
+          }
+
+          log.info(
+            "COMBO",
+            `Falling back from ${modelStr} to next target (i=${i + 1}/${orderedTargets.length})`
+          );
           return null;
         }
         return null;
       };
+
+      // ── Probe phase (parallel, non-blocking) ─────────────────────────────
+      // Start the probe IN THE BACKGROUND alongside the first real attempt.
+      // If the first target succeeds, the probe is irrelevant (zero latency).
+      // If the first target fails, we use probe results to reorder remaining
+      // targets — alive providers first, rate-limited providers trigger
+      // non-blocking provisioning, param-incompatible models are skipped.
+      // Results are cached for 60s so subsequent requests reuse them.
+      let probePromise: Promise<import("./combo/probePhase.ts").ProbePhaseResult | null> | null =
+        null;
+      let probeApplied = false;
+
+      if (orderedTargets.length > 20 && !signal?.aborted) {
+        probePromise = startProbePhase(
+          combo.name,
+          orderedTargets,
+          handleSingleModel, // raw handler — probe has its own timeout
+          body as Record<string, unknown>,
+          log,
+          signal,
+          { minPoolSize: 20, concurrency: 40, timeoutMs: 3000, cacheTtlMs: 60_000 }
+        );
+        // If cache hit, probePromise resolves immediately with cached results.
+        // Apply them right away — no need to wait for first attempt to fail.
+        if (probePromise) {
+          const cached = await Promise.race([
+            probePromise.then((r) => r),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 50)), // 50ms — cache hit returns instantly, fresh probe takes seconds
+          ]);
+          if (cached && cached.elapsedMs < 1000) {
+            // Cache hit (completed in <1s) — apply immediately
+            for (const model of cached.paramErrorModels) failedModelSet.add(model);
+            for (const provider of cached.rateLimitedProviders) {
+              log.info(
+                "PROVISIONER_HOOK",
+                `Probe cache: provider ${provider} rate-limited — triggering background provisioning`
+              );
+              triggerProviderProvisioning(provider);
+            }
+            orderedTargets = reorderByProbeResults(orderedTargets, cached);
+            probeApplied = true;
+          }
+          // If it took >50ms (fresh probe), don't block — let the main loop start.
+          // Probe results will be applied after the first target fails.
+        }
+      }
 
       for (let i = 0; i < orderedTargets.length; i++) {
         if (anySuccess || comboExpired) break;
@@ -2057,6 +2336,32 @@ export async function handleComboChat({
           latencyMs,
           fallbackCount,
         });
+
+        // Reactive provisioning: all accounts inactive — trigger provisioning for
+        // all providers, then wait for ANY one to resolve before retrying.
+        // Invalidate probe cache — providers may have been provisioned since probe.
+        invalidateProbeCache(combo.name);
+        const comboProviders = [
+          ...new Set(orderedTargets.map((t) => t.provider).filter(Boolean)),
+        ] as string[];
+        log.info(
+          "PROVISIONER_HOOK",
+          `Combo "${combo.name}" ALL_ACCOUNTS_INACTIVE — triggering provisioning for: ${comboProviders.join(", ")}`
+        );
+        for (const p of comboProviders) triggerProviderProvisioning(p);
+        const provisioned = await waitForAnyProvisioning(120_000);
+        if (provisioned) {
+          log.info(
+            "PROVISIONER_HOOK",
+            `Combo "${combo.name}" provisioning completed — retrying with new key`
+          );
+          return dispatchWithCooldownRetry();
+        }
+        log.warn(
+          "PROVISIONER_HOOK",
+          `Combo "${combo.name}" provisioning timed out — returning error`
+        );
+
         recordComboFailure(effectiveSessionId, combo.name);
         return errorResponseWithComboDiagnostics(
           503,
@@ -2147,6 +2452,28 @@ export async function handleComboChat({
       // model: auto" instead of an opaque 5xx. We pass the upstream retry-after seconds to
       // the hint so the client can render a precise "wait Ns and retry" message.
       log.warn("COMBO", `All models failed | ${msg}`);
+
+      // Reactive provisioning: all models failed — trigger provisioning for
+      // all providers, then wait for ANY one to resolve before retrying.
+      {
+        const comboProviders = [
+          ...new Set(orderedTargets.map((t) => t.provider).filter(Boolean)),
+        ] as string[];
+        log.info(
+          "PROVISIONER_HOOK",
+          `Combo "${combo.name}" all models failed — triggering provisioning for: ${comboProviders.join(", ")}`
+        );
+        for (const p of comboProviders) triggerProviderProvisioning(p);
+        const provisioned = await waitForAnyProvisioning(120_000);
+        if (provisioned) {
+          log.info(
+            "PROVISIONER_HOOK",
+            `Combo "${combo.name}" provisioning completed after all-models-failed — retrying`
+          );
+          return dispatchWithCooldownRetry();
+        }
+      }
+
       const { pinClearedNow } = recordComboFailure(effectiveSessionId, combo.name);
       if (pinClearedNow) {
         log.info(
@@ -2262,12 +2589,14 @@ async function handleRoundRobinCombo({
         }
     : allCombos;
 
-  const orderedTargets = resolveComboTargets(
+  const rrOrderedTargets = resolveComboTargets(
     rrExpandedCombo,
     rrExpandedAllCombos,
     clampComboDepth(config.maxComboDepth),
     hiddenModelsByProvider
   );
+  // Put recently-succeeded models first (cross-request cache)
+  const orderedTargets = reorderTargetsByRecentSuccess(rrOrderedTargets);
   const tagFilteredTargets = await applyRequestTagRouting(orderedTargets, body, log);
   const evalRankedTargets = orderTargetsByEvalScores(tagFilteredTargets, config.evalRouting, log);
   const knownContextOverflow = getKnownContextOverflow(evalRankedTargets, body);
@@ -2477,7 +2806,6 @@ async function handleRoundRobinCombo({
   let lastError: string | null = null;
   let lastStatus: number | null = null;
   let earliestRetryAfter: ComboRetryAfter | null = null;
-  let globalAttempts = 0;
   let fallbackCount = 0;
   let recordedAttempts = 0;
 
@@ -2563,14 +2891,10 @@ async function handleRoundRobinCombo({
     // Retry loop within this model
     try {
       for (let retry = 0; retry <= maxRetries; retry++) {
-        globalAttempts++;
-        if (globalAttempts > MAX_GLOBAL_ATTEMPTS) {
-          log.warn(
-            "COMBO-RR",
-            `Maximum combo attempts (${MAX_GLOBAL_ATTEMPTS}) exceeded. Terminating loop to prevent runaway requests.`
-          );
-          return errorResponse(503, "Maximum combo retry limit reached");
-        }
+        // No global attempt limit — round-robin combo must try ALL targets across
+        // ALL providers before concluding exhaustion. Per-provider provisioning
+        // fires non-blocking when a provider is exhausted; only when ALL providers
+        // are exhausted does the combo wait for provisioning to resolve.
         if (retry > 0) {
           log.info(
             "COMBO-RR",
@@ -2672,6 +2996,7 @@ async function handleRoundRobinCombo({
             "COMBO-RR",
             `${modelStr} succeeded (${latencyMs}ms, ${fallbackCount} fallbacks)`
           );
+          recordModelSuccess(modelStr);
           recordComboRequest(combo.name, modelStr, {
             success: true,
             latencyMs,
@@ -2881,6 +3206,15 @@ async function handleRoundRobinCombo({
         });
         // #6692: mirrors handleComboChat's exhaustion-point release above.
         releaseStickyPinOnFailure(_rrSessionSticky.messageHash, targetWithConnection.connectionId);
+
+        // Reactive provisioning: fire as soon as a provider's keys are exhausted.
+        if (providerExhausted && provider && provider !== "unknown") {
+          log.info(
+            "PROVISIONER_HOOK",
+            `Combo-RR "${combo.name}" provider ${provider} exhausted — triggering provisioning`
+          );
+          triggerProviderProvisioning(provider);
+        }
 
         // Transient errors → mark in semaphore so round-robin stops stampeding this target.
         if (

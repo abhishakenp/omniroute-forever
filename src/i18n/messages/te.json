@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "ఈ పేజీ localhost లేదా LAN నుండి మాత్రమే యాక్సెస్ చేయబడుతుంది (LOCAL_ONLY).",
     "pollErrorStopped": "పోలింగ్ ఆగింది: సర్వర్ అభ్యర్థనను తిరస్కరించింది (404/403).",
     "pollErrorTransient": "డేటాను పొందడంలో లోపం: స్వయంచాలకంగా మళ్లీ ప్రయత్నిస్తోంది.",
-    "degraded": "పాక్షిక డేటా: అందుబాటులో లేని మూలాలు: {sources}",
-    "degraded.source.database": "డేటాబేస్",
-    "degraded.source.circuitBreaker": "సర్క్యూట్ బ్రేకర్",
-    "degraded.source.modelLockouts": "మోడల్ లాక్‌అవుట్‌లు",
-    "degraded.source.count": "కనెక్షన్ల సంఖ్య"
+    "degraded": {
+      "label": "పాక్షిక డేటా: అందుబాటులో లేని మూలాలు: {sources}",
+      "source": {
+        "database": "డేటాబేస్",
+        "circuitBreaker": "సర్క్యూట్ బ్రేకర్",
+        "modelLockouts": "మోడల్ లాక్‌అవుట్‌లు",
+        "count": "కనెక్షన్ల సంఖ్య"
+      }
+    }
   }
 }

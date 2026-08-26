@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Denne side er kun tilgængelig fra localhost eller LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Polling stoppet: serveren afviste anmodningen (404/403).",
     "pollErrorTransient": "Fejl ved hentning af data: forsøger automatisk igen.",
-    "degraded": "Delvise data: utilgængelige kilder: {sources}",
-    "degraded.source.database": "Database",
-    "degraded.source.circuitBreaker": "Afbryder",
-    "degraded.source.modelLockouts": "Modellåsninger",
-    "degraded.source.count": "Antal Forbindelser"
+    "degraded": {
+      "label": "Delvise data: utilgængelige kilder: {sources}",
+      "source": {
+        "database": "Database",
+        "circuitBreaker": "Afbryder",
+        "modelLockouts": "Modellåsninger",
+        "count": "Antal Forbindelser"
+      }
+    }
   }
 }

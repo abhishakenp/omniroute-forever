@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Ang pahinang ito ay maa-access lamang mula sa localhost o LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Huminto ang polling: tinanggihan ng server ang kahilingan (404/403).",
     "pollErrorTransient": "Error sa pagkuha ng data: awtomatikong sinusubukan muli.",
-    "degraded": "Bahagyang data: hindi available na pinagmulan: {sources}",
-    "degraded.source.database": "Database",
-    "degraded.source.circuitBreaker": "Circuit Breaker",
-    "degraded.source.modelLockouts": "Mga Lockout ng Modelo",
-    "degraded.source.count": "Bilang ng Koneksyon"
+    "degraded": {
+      "label": "Bahagyang data: hindi available na pinagmulan: {sources}",
+      "source": {
+        "database": "Database",
+        "circuitBreaker": "Circuit Breaker",
+        "modelLockouts": "Mga Lockout ng Modelo",
+        "count": "Bilang ng Koneksyon"
+      }
+    }
   }
 }

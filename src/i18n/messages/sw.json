@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Ukurasa huu unafikiwa tu kutoka localhost au LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Uchunguzi umesimamishwa: seva ilikataa ombi (404/403).",
     "pollErrorTransient": "Hitilafu katika kupata data: inajaribu tena kiotomatiki.",
-    "degraded": "Data isiyokamilika: vyanzo visivyopatikana: {sources}",
-    "degraded.source.database": "Hifadhidata",
-    "degraded.source.circuitBreaker": "Kivunja Mzunguko",
-    "degraded.source.modelLockouts": "Kufuli za Mfano",
-    "degraded.source.count": "Idadi ya Miunganisho"
+    "degraded": {
+      "label": "Data isiyokamilika: vyanzo visivyopatikana: {sources}",
+      "source": {
+        "database": "Hifadhidata",
+        "circuitBreaker": "Kivunja Mzunguko",
+        "modelLockouts": "Kufuli za Mfano",
+        "count": "Idadi ya Miunganisho"
+      }
+    }
   }
 }

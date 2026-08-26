@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Эта страница доступна только с localhost или LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Опрос остановлен: сервер отклонил запрос (404/403).",
     "pollErrorTransient": "Ошибка получения данных: автоматический повтор.",
-    "degraded": "Частичные данные: недоступные источники: {sources}",
-    "degraded.source.database": "База Данных",
-    "degraded.source.circuitBreaker": "Автомат Защиты",
-    "degraded.source.modelLockouts": "Блокировки Модели",
-    "degraded.source.count": "Количество Соединений"
+    "degraded": {
+      "label": "Частичные данные: недоступные источники: {sources}",
+      "source": {
+        "database": "База Данных",
+        "circuitBreaker": "Автомат Защиты",
+        "modelLockouts": "Блокировки Модели",
+        "count": "Количество Соединений"
+      }
+    }
   }
 }

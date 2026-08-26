@@ -65,6 +65,15 @@ export const CATALOG_STALE_WHILE_REVALIDATE_MS = 30_000;
  */
 export const CATALOG_CACHE_TTL_MS_DEFAULT = 60_000;
 
+/**
+ * Maximum number of cached catalog entries. Each entry holds a ~1.3 MB model
+ * catalog body. The cache key includes the API key, so deployments with many
+ * unique API keys could otherwise grow this Map unbounded. The full-cache
+ * invalidation on DB writes (`dropCatalogCacheIfStateChanged`) is the primary
+ * eviction, but this cap prevents unbounded growth between writes.
+ */
+const CATALOG_CACHE_MAX_ENTRIES = 32;
+
 const catalogCache = new Map<string, CachedCatalog>();
 
 /**
@@ -152,6 +161,12 @@ function storePayload(
     expiresAt: Date.now() + payload.cacheTTL,
   };
   if (buildGeneration === getModelCatalogCacheVersion()) {
+    // Enforce size cap: evict the oldest entry (Map iteration order = insertion
+    // order) before inserting. Each entry is ~1.3 MB, so 32 entries ≈ 42 MB.
+    if (catalogCache.size >= CATALOG_CACHE_MAX_ENTRIES && !catalogCache.has(cacheKey)) {
+      const oldestKey = catalogCache.keys().next().value;
+      if (oldestKey) catalogCache.delete(oldestKey);
+    }
     catalogCache.set(cacheKey, entry);
   }
   return entry;
@@ -260,6 +275,15 @@ export async function resolveCachedCatalogResponse(
       status: cached.status,
       headers: mergeCatalogHeaders(corsHeaders, cached.headers, diagnosticHeaders),
     });
+  }
+
+  // Entry is expired beyond the stale window (or was a cached error): evict it
+  // so the Map doesn't accumulate dead entries between full-cache invalidations.
+  // Without this, expired entries were never removed — only the version-bump
+  // clear dropped them, so deployments with infrequent DB writes and many unique
+  // API keys leaked ~1.3 MB per stale entry.
+  if (cached && now - cached.expiresAt > CATALOG_STALE_WHILE_REVALIDATE_MS) {
+    catalogCache.delete(cacheKey);
   }
 
   const currentGeneration = getModelCatalogCacheVersion();

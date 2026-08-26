@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Ez az oldal csak localhostról vagy LAN-ról érhető el (LOCAL_ONLY).",
     "pollErrorStopped": "Lekérdezés leállítva: a szerver elutasította a kérést (404/403).",
     "pollErrorTransient": "Hiba az adatok lekérésekor: automatikus újrapróbálkozás.",
-    "degraded": "Részleges adatok: nem elérhető források: {sources}",
-    "degraded.source.database": "Adatbázis",
-    "degraded.source.circuitBreaker": "Megszakító",
-    "degraded.source.modelLockouts": "Modell Zárolások",
-    "degraded.source.count": "Kapcsolatok Száma"
+    "degraded": {
+      "label": "Részleges adatok: nem elérhető források: {sources}",
+      "source": {
+        "database": "Adatbázis",
+        "circuitBreaker": "Megszakító",
+        "modelLockouts": "Modell Zárolások",
+        "count": "Kapcsolatok Száma"
+      }
+    }
   }
 }

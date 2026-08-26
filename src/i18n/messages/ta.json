@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "இந்தப் பக்கம் localhost அல்லது LAN இலிருந்து மட்டுமே அணுகக்கூடியது (LOCAL_ONLY).",
     "pollErrorStopped": "வாக்கெடுப்பு நிறுத்தப்பட்டது: சேவையகம் கோரிக்கையை நிராகரித்தது (404/403).",
     "pollErrorTransient": "தரவைப் பெறுவதில் பிழை: தானாக மீண்டும் முயற்சிக்கிறது.",
-    "degraded": "பகுதி தரவு: கிடைக்காத மூலங்கள்: {sources}",
-    "degraded.source.database": "தரவுத்தளம்",
-    "degraded.source.circuitBreaker": "சுற்று பிரேக்கர்",
-    "degraded.source.modelLockouts": "மாதிரி பூட்டுகள்",
-    "degraded.source.count": "இணைப்புகளின் எண்ணிக்கை"
+    "degraded": {
+      "label": "பகுதி தரவு: கிடைக்காத மூலங்கள்: {sources}",
+      "source": {
+        "database": "தரவுத்தளம்",
+        "circuitBreaker": "சுற்று பிரேக்கர்",
+        "modelLockouts": "மாதிரி பூட்டுகள்",
+        "count": "இணைப்புகளின் எண்ணிக்கை"
+      }
+    }
   }
 }

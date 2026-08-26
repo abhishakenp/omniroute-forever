@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Тази страница е достъпна само от localhost или LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Запитването е спряно: сървърът отхвърли заявката (404/403).",
     "pollErrorTransient": "Грешка при извличане на данни: автоматичен повторен опит.",
-    "degraded": "Частични данни: недостъпни източници: {sources}",
-    "degraded.source.database": "База Данни",
-    "degraded.source.circuitBreaker": "Прекъсвач",
-    "degraded.source.modelLockouts": "Заключвания на Модел",
-    "degraded.source.count": "Брой Връзки"
+    "degraded": {
+      "label": "Частични данни: недостъпни източници: {sources}",
+      "source": {
+        "database": "База Данни",
+        "circuitBreaker": "Прекъсвач",
+        "modelLockouts": "Заключвания на Модел",
+        "count": "Брой Връзки"
+      }
+    }
   }
 }

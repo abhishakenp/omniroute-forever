@@ -84,7 +84,6 @@ export const MAX_COMBO_DEPTH = 3;
 // nested-combo expansion is a real DoS/perf risk.
 export const MAX_COMBO_DEPTH_HARD_CAP = 10;
 export const MAX_FALLBACK_WAIT_MS = 5000;
-export const MAX_GLOBAL_ATTEMPTS = 30;
 
 /**
  * Clamp an operator-configured combo nesting depth (config.maxComboDepth) to a
@@ -126,7 +125,7 @@ export function shouldSkipForPredictedTtft(
  * whole-provider breaker (it's connection-cooldown / model-lockout scope). Defined locally
  * rather than imported to avoid a cross-layer (open-sse → src/sse) import cycle.
  */
-const PROVIDER_BREAKER_FAILURE_STATUSES = new Set([408, 500, 502, 503, 504]);
+const PROVIDER_BREAKER_FAILURE_STATUSES = new Set([402, 408, 500, 502, 503, 504]);
 
 /**
  * Decide whether a failed combo target should record a whole-provider circuit-breaker

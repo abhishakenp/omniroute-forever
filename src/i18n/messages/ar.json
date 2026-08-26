@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "هذه الصفحة متاحة فقط من localhost أو الشبكة المحلية (LOCAL_ONLY).",
     "pollErrorStopped": "توقف الاستطلاع: رفض الخادم الطلب (404/403).",
     "pollErrorTransient": "خطأ في جلب البيانات: إعادة المحاولة تلقائيًا.",
-    "degraded": "بيانات جزئية: مصادر غير متاحة: {sources}",
-    "degraded.source.database": "قاعدة البيانات",
-    "degraded.source.circuitBreaker": "قاطع الدائرة",
-    "degraded.source.modelLockouts": "حظر النماذج",
-    "degraded.source.count": "عدد الاتصالات"
+    "degraded": {
+      "label": "بيانات جزئية: مصادر غير متاحة: {sources}",
+      "source": {
+        "database": "قاعدة البيانات",
+        "circuitBreaker": "قاطع الدائرة",
+        "modelLockouts": "حظر النماذج",
+        "count": "عدد الاتصالات"
+      }
+    }
   }
 }

@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "این صفحه فقط از localhost یا LAN قابل دسترسی است (LOCAL_ONLY).",
     "pollErrorStopped": "نظرسنجی متوقف شد: سرور درخواست را رد کرد (404/403).",
     "pollErrorTransient": "خطا در دریافت داده: تلاش مجدد خودکار.",
-    "degraded": "داده ناقص: منابع در دسترس نیست: {sources}",
-    "degraded.source.database": "پایگاه داده",
-    "degraded.source.circuitBreaker": "قطع‌کننده مدار",
-    "degraded.source.modelLockouts": "قفل‌های مدل",
-    "degraded.source.count": "تعداد اتصالات"
+    "degraded": {
+      "label": "داده ناقص: منابع در دسترس نیست: {sources}",
+      "source": {
+        "database": "پایگاه داده",
+        "circuitBreaker": "قطع‌کننده مدار",
+        "modelLockouts": "قفل‌های مدل",
+        "count": "تعداد اتصالات"
+      }
+    }
   }
 }

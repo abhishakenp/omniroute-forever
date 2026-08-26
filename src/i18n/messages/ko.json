@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "이 페이지는 localhost 또는 LAN에서만 접근 가능합니다(LOCAL_ONLY).",
     "pollErrorStopped": "폴링 중지됨: 서버가 요청을 거부했습니다(404/403).",
     "pollErrorTransient": "데이터 가져오기 오류: 자동으로 재시도합니다.",
-    "degraded": "부분 데이터: 사용할 수 없는 소스: {sources}",
-    "degraded.source.database": "데이터베이스",
-    "degraded.source.circuitBreaker": "회로 차단기",
-    "degraded.source.modelLockouts": "모델 잠금",
-    "degraded.source.count": "연결 수"
+    "degraded": {
+      "label": "부분 데이터: 사용할 수 없는 소스: {sources}",
+      "source": {
+        "database": "데이터베이스",
+        "circuitBreaker": "회로 차단기",
+        "modelLockouts": "모델 잠금",
+        "count": "연결 수"
+      }
+    }
   }
 }

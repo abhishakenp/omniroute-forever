@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Bu səhifə yalnız localhost və ya LAN-dan əlçatandır (LOCAL_ONLY).",
     "pollErrorStopped": "Sorğu dayandırıldı: server sorğunu rədd etdi (404/403).",
     "pollErrorTransient": "Məlumat alarkən xəta: avtomatik yenidən cəhd edilir.",
-    "degraded": "Qismən məlumat: əlçatmaz mənbələr: {sources}",
-    "degraded.source.database": "Verilənlər Bazası",
-    "degraded.source.circuitBreaker": "Dövrə Açarı",
-    "degraded.source.modelLockouts": "Model Blokları",
-    "degraded.source.count": "Bağlantı Sayı"
+    "degraded": {
+      "label": "Qismən məlumat: əlçatmaz mənbələr: {sources}",
+      "source": {
+        "database": "Verilənlər Bazası",
+        "circuitBreaker": "Dövrə Açarı",
+        "modelLockouts": "Model Blokları",
+        "count": "Bağlantı Sayı"
+      }
+    }
   }
 }

@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Deze pagina is alleen toegankelijk vanaf localhost of LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Polling gestopt: de server heeft het verzoek geweigerd (404/403).",
     "pollErrorTransient": "Fout bij ophalen van gegevens: automatisch opnieuw proberen.",
-    "degraded": "Gedeeltelijke gegevens: niet-beschikbare bronnen: {sources}",
-    "degraded.source.database": "Database",
-    "degraded.source.circuitBreaker": "Circuit Breaker",
-    "degraded.source.modelLockouts": "Modelvergrendelingen",
-    "degraded.source.count": "Aantal Verbindingen"
+    "degraded": {
+      "label": "Gedeeltelijke gegevens: niet-beschikbare bronnen: {sources}",
+      "source": {
+        "database": "Database",
+        "circuitBreaker": "Circuit Breaker",
+        "modelLockouts": "Modelvergrendelingen",
+        "count": "Aantal Verbindingen"
+      }
+    }
   }
 }

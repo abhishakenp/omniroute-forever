@@ -157,8 +157,16 @@ const pendingRequests: {
 const pendingById = new Map<string, PendingRequestDetail>();
 
 const DEFAULT_MAX_PENDING_REQUEST_AGE_MS = 60 * 60 * 1000;
-const MAX_PENDING_DETAILS = 5000;
-const PENDING_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+// Reduced from 5000 to 1000: with call_log_pipeline_enabled=true each pending
+// detail can hold up to 1.5 MB of streamChunks (512 KB × 3 fields). At 5000
+// entries that is 7.5 GB — exactly the OOM threshold for the default 8 GB heap.
+// 1000 entries caps the worst-case in-memory footprint at ~1.5 GB.
+const MAX_PENDING_DETAILS = 1000;
+// Reduced from 5 min to 60 s: at 25 req/s, 5 min between sweeps let the
+// pending count grow to ~7500 between sweeps (11 GB of streamChunks). The
+// sweep now runs every 60 s so the insertion-time cap (below) stays bounded
+// even under burst traffic.
+const PENDING_SWEEP_INTERVAL_MS = 60 * 1000;
 let _pendingSweepTimer: ReturnType<typeof setInterval> | null = null;
 
 export function getMaxPendingRequestAgeMs(
@@ -232,6 +240,34 @@ function isSafeKey(key: string): boolean {
 }
 
 /**
+ * Insertion-time cap: evict the single oldest pending detail when the Map
+ * exceeds MAX_PENDING_DETAILS. The 5-minute (now 60-second) sweep alone
+ * cannot keep up under high request rates (25+ req/s) — between sweeps the
+ * pending count grew unbounded, and with call_log_pipeline_enabled=true each
+ * entry holds up to 1.5 MB of streamChunks, causing OOM at 7.5 GB.
+ *
+ * Map iteration order is insertion order, so the first entry is the oldest.
+ * This is O(1) — no sort, no full iteration.
+ */
+function evictOldestPendingIfOverCap(): void {
+  if (pendingById.size <= MAX_PENDING_DETAILS) return;
+  const oldest = pendingById.values().next().value;
+  if (!oldest) return;
+  // Reuse the same removal logic as the sweep to keep counters consistent.
+  const modelKey = oldest.provider ? `${oldest.model} (${oldest.provider})` : oldest.model;
+  pendingById.delete(oldest.id);
+  if (oldest.connectionId && isSafeKey(modelKey)) {
+    const bucket = pendingRequests.details[oldest.connectionId]?.[modelKey];
+    if (bucket) {
+      const index = bucket.findIndex((entry) => entry.id === oldest.id);
+      if (index >= 0) bucket.splice(index, 1);
+    }
+    cleanupPendingDetails(oldest.connectionId, modelKey);
+    decrementPendingCounters(modelKey, oldest.connectionId);
+  }
+}
+
+/**
  * Track a pending request.
  */
 export function trackPendingRequest(
@@ -294,6 +330,7 @@ export function trackPendingRequest(
       };
       pendingRequests.details[connectionId][modelKey].push(newDetail);
       pendingById.set(newDetail.id, newDetail);
+      evictOldestPendingIfOverCap();
       return newDetail.id;
     } else if (!started && nextCount >= 0) {
       if (pendingRequests.details[connectionId]?.[modelKey]?.length) {

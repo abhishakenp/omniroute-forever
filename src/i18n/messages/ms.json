@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Halaman ini hanya boleh diakses dari localhost atau LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Polling dihentikan: pelayan menolak permintaan (404/403).",
     "pollErrorTransient": "Ralat mengambil data: cuba semula secara automatik.",
-    "degraded": "Data separa: sumber tidak tersedia: {sources}",
-    "degraded.source.database": "Pangkalan Data",
-    "degraded.source.circuitBreaker": "Circuit Breaker",
-    "degraded.source.modelLockouts": "Penguncian Model",
-    "degraded.source.count": "Bilangan Sambungan"
+    "degraded": {
+      "label": "Data separa: sumber tidak tersedia: {sources}",
+      "source": {
+        "database": "Pangkalan Data",
+        "circuitBreaker": "Circuit Breaker",
+        "modelLockouts": "Penguncian Model",
+        "count": "Bilangan Sambungan"
+      }
+    }
   }
 }

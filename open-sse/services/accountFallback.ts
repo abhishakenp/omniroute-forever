@@ -133,14 +133,14 @@ function pruneConnectionFailureDedupeEntries(): void {
   }
 }
 
-const _connectionFailureSweep = setInterval(() => {
+// Event-driven dedup cleanup: prune expired entries on each new failure record
+// instead of a 60s setInterval sweep. Called from recordConnectionFailure().
+function pruneExpiredDedupEntries(): void {
   const now = Date.now();
   for (const [key, ts] of lastConnectionFailure) {
     if (now - ts > CONNECTION_FAILURE_DEDUP_MS) lastConnectionFailure.delete(key);
   }
-}, 60_000);
-if (typeof _connectionFailureSweep === "object" && "unref" in _connectionFailureSweep) {
-  (_connectionFailureSweep as { unref?: () => void }).unref?.();
+  pruneConnectionFailureDedupeEntries();
 }
 
 // T06 (sub2api PR #1037): Signals that indicate permanent account deactivation.
@@ -196,6 +196,15 @@ export const CREDITS_EXHAUSTED_SIGNALS = [
   "insufficient balance",
   "insufficient_balance",
   "insufficient account balance",
+  // Additional provider-specific credit-exhaustion signals observed in production:
+  // - bazaarlink: "Insufficient credits. Please top up to continue."
+  // - kilocode: "Paid Model - Credits Required" / "Add credits to continue"
+  // - Generic: "top up to continue" / "credits required"
+  "insufficient credits",
+  "top up to continue",
+  "credits required",
+  "add credits to continue",
+  "paid model",
 ];
 
 // T11: Signals that indicate OAuth token is invalid/expired (not permanent deactivation)
@@ -320,6 +329,20 @@ const PARAM_VALIDATION_PATTERNS = [
   /max_tokens.*illegal/i,
   /max_tokens.*must be/i,
   /max_tokens.*range/i,
+  /max_tokens.*too large/i,
+  /max_tokens.*exceed/i,
+  /max.?tokens.*must be/i, // "max tokens must be" (space, not underscore)
+  /max.?tokens.*exceed/i,
+  /max.?tokens.*less than/i,
+  /reasoning_effort.*not supported/i,
+  /reasoning_effort.*not enabled/i,
+  /reasoning_effort.*invalid/i,
+  /reasoning_effort.*not valid/i,
+  /reasoning.*not supported.*model/i,
+  /reasoning.*not enabled.*model/i,
+  /unsupported.*parameter/i,
+  /parameter.*not supported/i,
+  /parameter.*not enabled/i,
   /parameter is illegal/i,
   /is illegal.*range/i,
 ];
@@ -986,7 +1009,9 @@ export function recordProviderFailure(
     }
     lastConnectionFailure.delete(dedupKey);
     lastConnectionFailure.set(dedupKey, now);
-    pruneConnectionFailureDedupeEntries();
+    // Event-driven cleanup: prune expired entries on each new record
+    // instead of a 60s setInterval sweep (no polling).
+    pruneExpiredDedupEntries();
   }
 
   const breaker = configureProviderBreaker(provider, profile);
@@ -1755,6 +1780,21 @@ export function checkFallbackError(
     // Generic 400 is not account-fallback-worthy. Combo routing may still try a
     // different provider/model because combo fallback is target-level orchestration.
     return { shouldFallback: false, cooldownMs: 0, reason: RateLimitReason.UNKNOWN };
+  }
+
+  // 422 — Unprocessable Entity. The request was well-formed but the provider
+  // rejected it due to parameter incompatibility (e.g. reasoning_effort not
+  // supported, unsupported parameter for this model). This is deterministic for
+  // the same model — every key/account will get the same 422. Cool down with
+  // 0ms (don't mark the connection as rate-limited) and let combo routing
+  // skip to the next target. The combo loop separately adds the model to
+  // failedModelSet to skip all remaining keys for the same model.
+  if (status === HTTP_STATUS.UNPROCESSABLE_ENTITY) {
+    return {
+      shouldFallback: true,
+      cooldownMs: 0,
+      reason: RateLimitReason.MODEL_CAPACITY,
+    };
   }
 
   // All other errors - fallback with transient cooldown

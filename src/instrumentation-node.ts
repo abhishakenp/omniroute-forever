@@ -350,6 +350,25 @@ export async function registerNodejs(): Promise<void> {
     const { startQuotaAutoPing } = await import("@/lib/services/quotaAutoPing");
     startQuotaAutoPing();
     console.log("[STARTUP] Quota auto-ping scheduler started (opt-in, no-op until enabled)");
+    // Prewarm reset-aware quota cache so first request doesn't block on 38
+    // serialized OpenRouter quota fetches (~12s). Must run AFTER chat.ts
+    // registers its quota fetchers, so we import chat first. The chat import
+    // also preloads the entire module chain (combo, pricing, usageDb, etc.)
+    // so the first request doesn't pay the lazy-module-load cost.
+    try {
+      await import("@/sse/handlers/chat");
+      // Preload combo + pricing modules so buildAutoCandidates doesn't
+      // trigger cascading dynamic imports on the first request.
+      const comboModule = await import("@omniroute/open-sse/services/combo");
+      await import("@/lib/db/settings/pricing");
+      await import("@/lib/usage/usageHistory");
+      // Import prewarmQuotaCache from combo (re-exported) to guarantee
+      // the same resetAwareQuotaCache Map instance is used.
+      void comboModule.prewarmQuotaCache();
+      console.log("[STARTUP] Quota cache prewarm initiated");
+    } catch (err) {
+      console.warn("[STARTUP] Quota cache prewarm import failed (non-fatal):", err);
+    }
     const cloudSyncInitialized = await ensureCloudSyncInitialized();
     console.log(
       `[STARTUP] Cloud/model sync background bootstrap ${cloudSyncInitialized ? "initialized" : "skipped"}`
@@ -658,6 +677,46 @@ export async function registerNodejs(): Promise<void> {
             "[STARTUP] Live dashboard WebSocket daemon failed to start (non-fatal):",
             msg
           );
+        }),
+
+      // Dynamic free combo generator: parallel-probes all free-tier providers
+      // and updates the auto/best-free combo with working providers only.
+      // Self-healing — re-probes every 5 minutes. Never fatal.
+      // WAITS for the first ModelSync cycle to complete before starting —
+      // otherwise buildFreeCandidates() self-fetches race ModelSync's 86
+      // concurrent sync requests for the HTTP server and time out.
+      import("@omniroute/open-sse/services/autoCombo/dynamicFreeCombo")
+        .then(async (m) => {
+          const { getComboByName } = await import("@/lib/db/combos");
+          const combo = await getComboByName("auto/best-free");
+          if (!combo?.id) {
+            console.warn("[STARTUP] Dynamic free combo: auto/best-free combo not found — skipping");
+            return;
+          }
+          const settings = await getSettings();
+          const omniUrl =
+            (settings.omniUrl as string) || `http://localhost:${process.env.PORT || 20128}`;
+          const apiKey = (settings.managementApiKey as string) || "";
+          const excluded = new Set<string>(
+            Array.isArray(settings.freeComboExcludedProviders)
+              ? (settings.freeComboExcludedProviders as string[])
+              : ["devin-cli"]
+          );
+          // Wait for the first ModelSync cycle to finish so the HTTP server
+          // is not contended when buildFreeCandidates() self-fetches.
+          const { getFirstModelSyncPromise } = await import("@/shared/services/modelSyncScheduler");
+          const firstSync = getFirstModelSyncPromise();
+          if (firstSync) {
+            console.log("[STARTUP] Dynamic free combo: waiting for first ModelSync cycle");
+            await firstSync;
+            console.log("[STARTUP] Dynamic free combo: ModelSync complete — starting generator");
+          }
+          m.startDynamicFreeComboGenerator(combo.id, apiKey, omniUrl, undefined, excluded);
+          console.log("[STARTUP] Dynamic free combo generator started");
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn("[STARTUP] Dynamic free combo generator failed to start (non-fatal):", msg);
         }),
     ]);
   }

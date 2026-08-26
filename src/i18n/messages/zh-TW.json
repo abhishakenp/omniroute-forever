@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "此頁面僅能從 localhost 或區域網路存取 (LOCAL_ONLY)。",
     "pollErrorStopped": "輪詢已停止:伺服器拒絕了請求 (404/403)。",
     "pollErrorTransient": "取得資料時發生錯誤:將自動重試。",
-    "degraded": "部分資料:無法使用的來源: {sources}",
-    "degraded.source.database": "資料庫",
-    "degraded.source.circuitBreaker": "斷路器",
-    "degraded.source.modelLockouts": "模型鎖定",
-    "degraded.source.count": "連線數"
+    "degraded": {
+      "label": "部分資料:無法使用的來源: {sources}",
+      "source": {
+        "database": "資料庫",
+        "circuitBreaker": "斷路器",
+        "modelLockouts": "模型鎖定",
+        "count": "連線數"
+      }
+    }
   }
 }

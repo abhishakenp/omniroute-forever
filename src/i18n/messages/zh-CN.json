@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "此页面仅可从 localhost 或局域网访问 (LOCAL_ONLY)。",
     "pollErrorStopped": "轮询已停止:服务器拒绝了请求 (404/403)。",
     "pollErrorTransient": "获取数据出错:将自动重试。",
-    "degraded": "部分数据:不可用的数据源: {sources}",
-    "degraded.source.database": "数据库",
-    "degraded.source.circuitBreaker": "断路器",
-    "degraded.source.modelLockouts": "模型锁定",
-    "degraded.source.count": "连接数"
+    "degraded": {
+      "label": "部分数据:不可用的数据源: {sources}",
+      "source": {
+        "database": "数据库",
+        "circuitBreaker": "断路器",
+        "modelLockouts": "模型锁定",
+        "count": "连接数"
+      }
+    }
   }
 }

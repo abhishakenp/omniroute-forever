@@ -109,7 +109,6 @@ import { markAccountExhaustedFrom429 } from "../../domain/quotaCache";
 import {
   triggerProviderProvisioning,
   triggerAllProvidersProvisioning,
-  waitForProviderProvisioning,
   waitForAnyProvisioning,
 } from "../services/provisionerHook";
 import { RequestTelemetry, recordTelemetry } from "../../shared/utils/requestTelemetry";
@@ -905,15 +904,14 @@ async function handleChatImplementation(
       !response.ok &&
       [502, 503].includes(response.status) &&
       typeof (settings as any)?.globalFallbackModel === "string" &&
-      (settings as any).globalFallbackModel.trim()
+      (settings as any).globalFallbackModel.trim() &&
+      !(runtimeOptions as any)?.emergencyFallbackTried
     ) {
       // Reactive provisioning: the entire combo is exhausted.
       // Trigger parallel provisioning for all providers in the background.
       // Keys will stream into OmniRoute as they're created — by the time
       // the global fallback also fails, new keys may already be available.
-      const comboProviders = (combo.targets || [])
-        .map((t: any) => t.provider)
-        .filter(Boolean);
+      const comboProviders = (combo.targets || []).map((t: any) => t.provider).filter(Boolean);
       if (comboProviders.length > 0) {
         triggerAllProvidersProvisioning(comboProviders);
       } else {
@@ -921,43 +919,54 @@ async function handleChatImplementation(
       }
 
       const fallbackModel = (settings as any).globalFallbackModel.trim();
-      log.info(
-        "GLOBAL_FALLBACK",
-        `Combo "${combo.name}" exhausted — attempting global fallback: ${fallbackModel}`
-      );
-      try {
-        const fallbackResponse = await handleSingleModelChat(
-          body,
-          fallbackModel,
-          clientRawRequest,
-          request,
-          combo.name,
-          apiKeyInfo,
-          telemetry,
-          {
-            sessionId,
-            sessionAffinityKey,
-            emergencyFallbackTried: true,
-            forceLiveComboTest: isComboLiveTest,
-          },
-          combo.strategy,
-          true
-        );
-        if (fallbackResponse.ok) {
-          log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
-          recordTelemetry(telemetry);
-          return withModalityBridgeHeader(
-            withSessionHeader(fallbackResponse, sessionId),
-            modalityBridgeHeader
-          );
-        }
+      // Guard against infinite recursion: if the global fallback IS the same
+      // combo that just failed, retrying it would loop forever (combo fails →
+      // fallback = same combo → safety-net redirect → combo fails again → …).
+      // Skip the fallback and let the 503 propagate to the client instead.
+      if (fallbackModel === combo.name || fallbackModel === modelStr) {
         log.warn(
           "GLOBAL_FALLBACK",
-          `Global fallback ${fallbackModel} also failed (${fallbackResponse.status})`
+          `Global fallback "${fallbackModel}" is the same as the exhausted combo "${combo.name}" — skipping to avoid recursion`
         );
-      } catch (err: any) {
-        log.warn("GLOBAL_FALLBACK", `Global fallback error: ${err?.message || "unknown"}`);
-      }
+      } else {
+        log.info(
+          "GLOBAL_FALLBACK",
+          `Combo "${combo.name}" exhausted — attempting global fallback: ${fallbackModel}`
+        );
+        try {
+          const fallbackResponse = await handleSingleModelChat(
+            body,
+            fallbackModel,
+            clientRawRequest,
+            request,
+            combo.name,
+            apiKeyInfo,
+            telemetry,
+            {
+              sessionId,
+              sessionAffinityKey,
+              emergencyFallbackTried: true,
+              forceLiveComboTest: isComboLiveTest,
+            },
+            combo.strategy,
+            true
+          );
+          if (fallbackResponse.ok) {
+            log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
+            recordTelemetry(telemetry);
+            return withModalityBridgeHeader(
+              withSessionHeader(fallbackResponse, sessionId),
+              modalityBridgeHeader
+            );
+          }
+          log.warn(
+            "GLOBAL_FALLBACK",
+            `Global fallback ${fallbackModel} also failed (${fallbackResponse.status})`
+          );
+        } catch (err: any) {
+          log.warn("GLOBAL_FALLBACK", `Global fallback error: ${err?.message || "unknown"}`);
+        }
+      } // end else (fallback !== combo)
     }
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -1079,6 +1088,10 @@ async function handleSingleModelChat(
   comboStrategy: string | null = null,
   isCombo: boolean = false
 ) {
+  log.info(
+    "CHAT",
+    `handleSingleModelChat model=${modelStr} combo=${comboName ?? "none"} strategy=${comboStrategy ?? "n/a"} isCombo=${isCombo}`
+  );
   // 1. Resolve model → provider/model
   const resolved = await resolveModelOrError(
     modelStr,
@@ -1137,6 +1150,10 @@ async function handleSingleModelChat(
             correlationId: runtimeOptions?.correlationId ?? null,
             // #7360 follow-up — see the primary handleSingleModel closure above.
             modelAbortSignal: target?.modelAbortSignal ?? null,
+            // Prevent infinite recursion: if this redirect was triggered by
+            // a global fallback, don't allow another global fallback from the
+            // redirected combo path.
+            emergencyFallbackTried: runtimeOptions?.emergencyFallbackTried ?? false,
           },
           target?.effectiveComboStrategy ?? redirectCombo.strategy ?? "priority",
           false
@@ -1393,31 +1410,83 @@ async function handleSingleModelChat(
         }
 
         // Reactive provisioning: all connections for this provider are rate-limited.
-        // Before giving up, wait up to 60s for background provisioning to produce a new key.
-        // The provisioner adds keys directly to OmniRoute, so after waiting we can retry.
+        // Trigger provisioning in the background (fire-and-forget) and IMMEDIATELY
+        // fall back to the global fallback model — no waiting, no blocking.
+        // The provisioned key arrives via SSE and is available for future requests.
+        // Only the combo path (auto/best-free) waits when ALL providers are exhausted.
         if (credentials?.allRateLimited) {
           triggerProviderProvisioning(provider);
           log.info(
             "PROVISIONER_HOOK",
-            `${provider}/${model} all connections exhausted — waiting up to 60s for new key...`
+            `${provider}/${model} all connections exhausted — provisioning triggered in background, falling back immediately`
           );
-          const provisioned = await waitForProviderProvisioning(provider, 60_000);
-          if (provisioned) {
+
+          // Immediately try global fallback model — no waiting
+          const settings = await getCachedSettings().catch(() => ({}) as Record<string, unknown>);
+          const fallbackModel = (settings as any).globalFallbackModel?.trim();
+          if (fallbackModel && fallbackModel !== modelStr) {
             log.info(
               "PROVISIONER_HOOK",
-              `${provider} provisioning completed — retrying with new key`
+              `${provider}/${model} exhausted — attempting global fallback: ${fallbackModel}`
             );
-            // Reset retry state and loop again — new key should now be available
-            requestRetryAttempt = 0;
-            requestRetryLastError = null;
-            requestRetryLastStatus = null;
-            requestRetryLastCooldownMs = 0;
-            continue requestAttemptLoop;
+            const fallbackResponse = await handleSingleModelChat(
+              body,
+              fallbackModel,
+              clientRawRequest,
+              request,
+              comboName,
+              apiKeyInfo,
+              telemetry,
+              { ...runtimeOptions, emergencyFallbackTried: true },
+              comboStrategy,
+              isCombo
+            );
+            if (fallbackResponse.ok) {
+              log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
+              return withSessionHeader(fallbackResponse, runtimeOptions.sessionId ?? null);
+            }
+            log.warn(
+              "GLOBAL_FALLBACK",
+              `Global fallback ${fallbackModel} also failed (${fallbackResponse.status})`
+            );
           }
-          log.warn(
-            "PROVISIONER_HOOK",
-            `${provider} provisioning timed out — returning error`
-          );
+        }
+
+        // Global fallback: no credentials available (all connections excluded
+        // or provider has no connections). Fire-and-forget provisioning, then
+        // immediately try the global fallback model — no waiting.
+        // This catches no-auth providers (opencode, g4f-*, etc.) whose synthetic
+        // credentials get excluded after a 429, leaving credentials=null.
+        if (!comboName && !runtimeOptions.emergencyFallbackTried) {
+          triggerProviderProvisioning(provider);
+          const settings = await getCachedSettings().catch(() => ({}) as Record<string, unknown>);
+          const fallbackModel = (settings as any).globalFallbackModel?.trim();
+          if (fallbackModel && fallbackModel !== modelStr) {
+            log.info(
+              "GLOBAL_FALLBACK",
+              `${provider}/${model} no credentials available — falling back to ${fallbackModel}`
+            );
+            const fallbackResponse = await handleSingleModelChat(
+              body,
+              fallbackModel,
+              clientRawRequest,
+              request,
+              comboName,
+              apiKeyInfo,
+              telemetry,
+              { ...runtimeOptions, emergencyFallbackTried: true },
+              comboStrategy,
+              isCombo
+            );
+            if (fallbackResponse.ok) {
+              log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
+              return withSessionHeader(fallbackResponse, runtimeOptions.sessionId ?? null);
+            }
+            log.warn(
+              "GLOBAL_FALLBACK",
+              `Global fallback ${fallbackModel} also failed (${fallbackResponse.status})`
+            );
+          }
         }
 
         const noCredsRes = handleNoCredentials(
@@ -1964,6 +2033,44 @@ async function handleSingleModelChat(
 
       if (shouldTripProviderBreakerForResult(result, isCombo, forceLiveComboTest)) {
         breaker._onFailure();
+      }
+
+      // Global fallback: no more connections to try for this provider.
+      // Fire-and-forget provisioning, then immediately try the global fallback
+      // model (e.g. auto/best-free) — no waiting, no blocking.
+      // This catches no-auth providers (opencode, g4f-*, etc.) whose synthetic
+      // credentials never set allRateLimited, so the pre-request check at the
+      // top of the loop doesn't fire.
+      if (!comboName && !runtimeOptions.emergencyFallbackTried) {
+        triggerProviderProvisioning(provider);
+        const settings = await getCachedSettings().catch(() => ({}) as Record<string, unknown>);
+        const fallbackModel = (settings as any).globalFallbackModel?.trim();
+        if (fallbackModel && fallbackModel !== modelStr) {
+          log.info(
+            "GLOBAL_FALLBACK",
+            `${provider}/${model} no more connections (${result.status}) — falling back to ${fallbackModel}`
+          );
+          const fallbackResponse = await handleSingleModelChat(
+            body,
+            fallbackModel,
+            clientRawRequest,
+            request,
+            comboName,
+            apiKeyInfo,
+            telemetry,
+            { ...runtimeOptions, emergencyFallbackTried: true },
+            comboStrategy,
+            isCombo
+          );
+          if (fallbackResponse.ok) {
+            log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
+            return withSessionHeader(fallbackResponse, runtimeOptions.sessionId ?? null);
+          }
+          log.warn(
+            "GLOBAL_FALLBACK",
+            `Global fallback ${fallbackModel} also failed (${fallbackResponse.status})`
+          );
+        }
       }
 
       return withSelectedConnectionHeader(result.response, credentials?.connectionId);

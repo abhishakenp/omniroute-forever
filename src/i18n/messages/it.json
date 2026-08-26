@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Questa pagina è accessibile solo da localhost o LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Sondaggio interrotto: il server ha rifiutato la richiesta (404/403).",
     "pollErrorTransient": "Errore nel recupero dei dati: nuovo tentativo automatico.",
-    "degraded": "Dati parziali: fonti non disponibili: {sources}",
-    "degraded.source.database": "Database",
-    "degraded.source.circuitBreaker": "Interruttore",
-    "degraded.source.modelLockouts": "Blocchi Modello",
-    "degraded.source.count": "Conteggio Connessioni"
+    "degraded": {
+      "label": "Dati parziali: fonti non disponibili: {sources}",
+      "source": {
+        "database": "Database",
+        "circuitBreaker": "Interruttore",
+        "modelLockouts": "Blocchi Modello",
+        "count": "Conteggio Connessioni"
+      }
+    }
   }
 }

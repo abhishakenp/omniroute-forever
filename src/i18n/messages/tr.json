@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Bu sayfaya yalnızca localhost veya LAN üzerinden erişilebilir (LOCAL_ONLY).",
     "pollErrorStopped": "Yoklama durduruldu: sunucu isteği reddetti (404/403).",
     "pollErrorTransient": "Veri alınırken hata: otomatik olarak yeniden deneniyor.",
-    "degraded": "Kısmi veri: kullanılamayan kaynaklar: {sources}",
-    "degraded.source.database": "Veritabanı",
-    "degraded.source.circuitBreaker": "Devre Kesici",
-    "degraded.source.modelLockouts": "Model Kilitleri",
-    "degraded.source.count": "Bağlantı Sayısı"
+    "degraded": {
+      "label": "Kısmi veri: kullanılamayan kaynaklar: {sources}",
+      "source": {
+        "database": "Veritabanı",
+        "circuitBreaker": "Devre Kesici",
+        "modelLockouts": "Model Kilitleri",
+        "count": "Bağlantı Sayısı"
+      }
+    }
   }
 }

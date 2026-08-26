@@ -1362,7 +1362,16 @@ export class BaseExecutor {
           await gateOutboundRequest(`agentrouter:${url}`);
         }
 
+        const _fetchStartMs = Date.now();
+        log?.info?.(
+          "UPSTREAM_FETCH",
+          `→ ${this.provider} ${model} ${url} conn=${activeCredentials?.connectionId ?? "?"} stream=${stream}`
+        );
         let response = await fetchWithStartTimeout(url, fetchOptions);
+        log?.info?.(
+          "UPSTREAM_FETCH",
+          `← ${this.provider} ${model} status=${response.status} elapsed=${Date.now() - _fetchStartMs}ms`
+        );
 
         if (openrouterFreeWindowAccountKey) {
           correctFromRateLimitHeaders(openrouterFreeWindowAccountKey, response.headers);
@@ -1561,11 +1570,22 @@ export class BaseExecutor {
         // Distinguish timeout errors from other abort errors
         const err = error instanceof Error ? error : new Error(String(error));
         if (err.name === "TimeoutError") {
-          log?.warn?.("TIMEOUT", `Fetch timeout after ${this.getTimeoutMs()}ms on ${url}`);
+          log?.warn?.(
+            "UPSTREAM_FETCH",
+            `⏱ timeout after ${this.getTimeoutMs()}ms on ${this.provider} ${model} ${url}`
+          );
+        } else {
+          log?.warn?.(
+            "UPSTREAM_FETCH",
+            `✗ error on ${this.provider} ${model} ${url}: ${err.message}`
+          );
         }
         lastError = err;
         if (!skipUpstreamRetry && urlIndex + 1 < fallbackCount) {
-          log?.debug?.("RETRY", `Error on ${url}, trying fallback ${urlIndex + 1}`);
+          log?.info?.(
+            "UPSTREAM_FETCH",
+            `↻ fallback ${urlIndex + 1}/${fallbackCount} for ${this.provider} ${model}`
+          );
           continue;
         }
         throw err;

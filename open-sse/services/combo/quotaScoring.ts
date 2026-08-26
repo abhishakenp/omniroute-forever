@@ -82,8 +82,12 @@ export function resolveResetAwareConfig(config: Record<string, unknown> | null |
         config?.resetAwareExhaustionGuardPercent,
         RESET_AWARE_DEFAULTS.exhaustionGuardPercent
       ) / 100,
-    quotaCacheTtlMs: getDurationConfig(config?.resetAwareQuotaCacheTtlMs, 0, 300_000),
-    quotaCacheMaxStaleMs: getDurationConfig(config?.resetAwareQuotaCacheMaxStaleMs, 0, 3_600_000),
+    quotaCacheTtlMs: getDurationConfig(config?.resetAwareQuotaCacheTtlMs, 300_000, 300_000),
+    quotaCacheMaxStaleMs: getDurationConfig(
+      config?.resetAwareQuotaCacheMaxStaleMs,
+      3_600_000,
+      3_600_000
+    ),
   };
 }
 
@@ -108,8 +112,12 @@ export function resolveResetWindowConfig(config: Record<string, unknown> | null 
       0,
       finiteNumberOrNull(config?.resetWindowTieBandMs) ?? RESET_WINDOW_DEFAULT_TIE_BAND_MS
     ),
-    quotaCacheTtlMs: getDurationConfig(config?.resetWindowQuotaCacheTtlMs, 0, 300_000),
-    quotaCacheMaxStaleMs: getDurationConfig(config?.resetWindowQuotaCacheMaxStaleMs, 0, 3_600_000),
+    quotaCacheTtlMs: getDurationConfig(config?.resetWindowQuotaCacheTtlMs, 300_000, 300_000),
+    quotaCacheMaxStaleMs: getDurationConfig(
+      config?.resetWindowQuotaCacheMaxStaleMs,
+      3_600_000,
+      3_600_000
+    ),
   };
 }
 

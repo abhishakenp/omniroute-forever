@@ -12,10 +12,19 @@ import { randomUUID } from "node:crypto";
 import { Agent, buildConnector, fetch as undiciFetch, type Dispatcher } from "undici";
 import { getSettings, updateSettings } from "@/lib/localDb";
 import { getRuntimePorts } from "@/lib/runtime/ports";
+import { getOriginalFetch } from "@omniroute/open-sse/utils/proxyFetch";
 
 const DEFAULT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MODEL_SYNC_SETTING_KEY = "model_sync_last_run";
 const MODEL_SYNC_INTERNAL_AUTH_HEADER = "x-model-sync-internal-auth";
+
+/**
+ * Promise that resolves when the first model-sync cycle completes.
+ * Other boot services (e.g. DYNAMIC_FREE_COMBO generator) can await this
+ * to avoid racing the sync cycle for the HTTP server's attention.
+ * `null` before `startModelSyncScheduler()` is called.
+ */
+let firstSyncCompletePromise: Promise<void> | null = null;
 
 function normalizeInternalBasePath(value: string | undefined): string {
   const trimmed = value?.trim();
@@ -108,7 +117,11 @@ export const fetchModelSyncInternal: typeof fetch = async (input, init = {}) => 
       dispatcher: getPinnedModelSyncTlsDispatcher(),
     });
   }
-  return globalThis.fetch(inputUrl.href, requestInit);
+  // Use the ORIGINAL (unpatched) fetch for loopback HTTP self-fetches.
+  // The patched globalThis.fetch adds proxy/TLS/retry overhead per call;
+  // for 86 concurrent self-fetches that overhead saturates the event loop
+  // and deadlocks the server (CPU 100%, HTTP unresponsive).
+  return getOriginalFetch()(inputUrl.href, requestInit);
 };
 
 const globalState = globalThis as typeof globalThis & {
@@ -176,6 +189,7 @@ async function getAutoSyncConnections(): Promise<
 
 /**
  * Sync models for a single connection via the internal sync-models endpoint.
+ * Timeout: 15s per connection — prevents one slow provider from blocking the batch.
  */
 async function syncConnectionModels(
   connectionId: string,
@@ -188,6 +202,7 @@ async function syncConnectionModels(
       {
         method: "POST",
         redirect: "error",
+        signal: AbortSignal.timeout(15_000),
         headers: {
           "Content-Type": "application/json",
           ...buildModelSyncInternalHeaders(),
@@ -215,6 +230,26 @@ async function syncConnectionModels(
 }
 
 /**
+ * Run async tasks in bounded concurrency batches.
+ * Prevents event-loop saturation when N >> available slots.
+ */
+async function runBatched<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let i = 0; i < items.length; i += concurrency) {
+    const batch = items.slice(i, i + concurrency);
+    const batchResults = await Promise.allSettled(batch.map(fn));
+    for (const r of batchResults) {
+      results.push(r.status === "fulfilled" ? r.value : (undefined as unknown as R));
+    }
+  }
+  return results;
+}
+
+/**
  * Run one full model-sync cycle across all auto-sync connections.
  */
 async function runSyncCycle(apiBaseUrl: string): Promise<void> {
@@ -235,13 +270,15 @@ async function runSyncCycle(apiBaseUrl: string): Promise<void> {
 
     console.log(`[ModelSync] Starting model sync cycle — ${connections.length} connection(s)`);
 
-    const results = await Promise.allSettled(
-      connections.map((conn) =>
-        syncConnectionModels(conn.id, conn.name || conn.provider, apiBaseUrl)
-      )
+    // Batch with bounded concurrency (4) to prevent event-loop saturation.
+    // Previous: Promise.allSettled(86 concurrent self-fetches) → 32 internal slots
+    // filled, 54 queued, CPU 100%, deadlock. Now: 4 at a time, 15s timeout each.
+    const SYNC_CONCURRENCY = 4;
+    const results = await runBatched(connections, SYNC_CONCURRENCY, (conn) =>
+      syncConnectionModels(conn.id, conn.name || conn.provider, apiBaseUrl)
     );
 
-    const succeeded = results.filter((r) => r.status === "fulfilled" && r.value === true).length;
+    const succeeded = results.filter((r) => r === true).length;
     console.log(
       `[ModelSync] Cycle complete: ${succeeded}/${connections.length} synced in ${Date.now() - start}ms`
     );
@@ -279,9 +316,32 @@ export function startModelSyncScheduler(
 
   console.log(`[ModelSync] Scheduler started — interval: ${effectiveIntervalMs / 3_600_000}h`);
 
-  // Run immediately on startup (staggered by 5s to avoid startup congestion)
-  const startupDelay = setTimeout(() => runSyncCycle(trustedApiBaseUrl), 5_000);
-  startupDelay.unref?.();
+  // Run immediately on startup — but wait for the HTTP server to be listening.
+  // Previous: 5s fixed delay raced the Next.js dev server boot (which takes 10-20s
+  // in dev mode). Self-fetches to 127.0.0.1:PORT failed with ECONNREFUSED, all 86
+  // connections failed to sync, and combo routing had no models for real requests.
+  // Now: poll the health endpoint until it responds, then sync.
+  firstSyncCompletePromise = new Promise<void>((resolve) => {
+    const waitForServer = async (): Promise<void> => {
+      const maxWaitMs = 60_000;
+      const pollIntervalMs = 2_000;
+      const start = Date.now();
+      while (Date.now() - start < maxWaitMs) {
+        try {
+          const res = await getOriginalFetch()(`${trustedApiBaseUrl}/api/monitoring/health`, {
+            signal: AbortSignal.timeout(3_000),
+          });
+          if (res.ok) break;
+        } catch {
+          // Server not ready yet
+        }
+        await new Promise((r) => setTimeout(r, pollIntervalMs));
+      }
+      await runSyncCycle(trustedApiBaseUrl);
+      resolve();
+    };
+    void waitForServer();
+  });
 
   // Codex-only: revalidate catalog only on first-start or app upgrade (not every boot).
   void import("./codexCatalogRevalidation")
@@ -306,6 +366,15 @@ export function stopModelSyncScheduler(): void {
     schedulerTimer = null;
     console.log("[ModelSync] Scheduler stopped");
   }
+}
+
+/**
+ * Returns a promise that resolves when the first model-sync cycle completes,
+ * or `null` if the scheduler hasn't been started yet.
+ * Use this to gate boot services that would otherwise race the sync cycle.
+ */
+export function getFirstModelSyncPromise(): Promise<void> | null {
+  return firstSyncCompletePromise;
 }
 
 /**

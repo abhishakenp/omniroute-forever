@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Tämä sivu on käytettävissä vain localhostista tai LAN-verkosta (LOCAL_ONLY).",
     "pollErrorStopped": "Kysely pysäytetty: palvelin hylkäsi pyynnön (404/403).",
     "pollErrorTransient": "Virhe tietojen haussa: yritetään automaattisesti uudelleen.",
-    "degraded": "Osittaiset tiedot: käyttökelvottomat lähteet: {sources}",
-    "degraded.source.database": "Tietokanta",
-    "degraded.source.circuitBreaker": "Piirikatkaisija",
-    "degraded.source.modelLockouts": "Mallilukitukset",
-    "degraded.source.count": "Yhteyksien Määrä"
+    "degraded": {
+      "label": "Osittaiset tiedot: käyttökelvottomat lähteet: {sources}",
+      "source": {
+        "database": "Tietokanta",
+        "circuitBreaker": "Piirikatkaisija",
+        "modelLockouts": "Mallilukitukset",
+        "count": "Yhteyksien Määrä"
+      }
+    }
   }
 }

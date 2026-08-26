@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "یہ صفحہ صرف localhost یا LAN سے قابل رسائی ہے (LOCAL_ONLY)۔",
     "pollErrorStopped": "پولنگ روک دی گئی: سرور نے درخواست مسترد کر دی (404/403)۔",
     "pollErrorTransient": "ڈیٹا حاصل کرنے میں خرابی: خودکار طور پر دوبارہ کوشش کی جا رہی ہے۔",
-    "degraded": "جزوی ڈیٹا: غیر دستیاب ذرائع: {sources}",
-    "degraded.source.database": "ڈیٹا بیس",
-    "degraded.source.circuitBreaker": "سرکٹ بریکر",
-    "degraded.source.modelLockouts": "ماڈل لاک آؤٹس",
-    "degraded.source.count": "کنکشنز کی تعداد"
+    "degraded": {
+      "label": "جزوی ڈیٹا: غیر دستیاب ذرائع: {sources}",
+      "source": {
+        "database": "ڈیٹا بیس",
+        "circuitBreaker": "سرکٹ بریکر",
+        "modelLockouts": "ماڈل لاک آؤٹس",
+        "count": "کنکشنز کی تعداد"
+      }
+    }
   }
 }

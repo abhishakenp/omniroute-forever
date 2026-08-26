@@ -2773,6 +2773,10 @@ export async function handleChatCore({
                   updatePendingScope(pendingScope, {
                     stage: "rate_limit_slot_acquired",
                   });
+                  log?.info?.(
+                    "EXECUTOR",
+                    `dispatch provider=${provider} model=${modelToCall} conn=${attemptConnectionId ?? "?"} attempt=${attempts + 1}/${maxAttempts}`
+                  );
                   return executeWithUpstreamStartTimeout({
                     executor,
                     provider,
@@ -2806,6 +2810,10 @@ export async function handleChatCore({
               );
               const res = normalizeExecutorResult(rawExecutorResult);
               trace("post_executor", { status: res?.response?.status });
+              log?.info?.(
+                "EXECUTOR",
+                `response provider=${provider} model=${modelToCall} status=${res?.response?.status} conn=${attemptConnectionId ?? "?"}`
+              );
 
               // Track Gemini RPM + RPD request counts for 429 classification
               if (provider === "gemini") {

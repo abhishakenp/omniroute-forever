@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "यह पृष्ठ केवल localhost या LAN से सुलभ है (LOCAL_ONLY)।",
     "pollErrorStopped": "पोलिंग रुकी: सर्वर ने अनुरोध अस्वीकार किया (404/403)।",
     "pollErrorTransient": "डेटा प्राप्त करने में त्रुटि: स्वतः पुनः प्रयास।",
-    "degraded": "आंशिक डेटा: अनुपलब्ध स्रोत: {sources}",
-    "degraded.source.database": "डेटाबेस",
-    "degraded.source.circuitBreaker": "सर्किट ब्रेकर",
-    "degraded.source.modelLockouts": "मॉडल लॉकआउट",
-    "degraded.source.count": "कनेक्शन गणना"
+    "degraded": {
+      "label": "आंशिक डेटा: अनुपलब्ध स्रोत: {sources}",
+      "source": {
+        "database": "डेटाबेस",
+        "circuitBreaker": "सर्किट ब्रेकर",
+        "modelLockouts": "मॉडल लॉकआउट",
+        "count": "कनेक्शन गणना"
+      }
+    }
   }
 }

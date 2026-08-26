@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Denna sida är endast åtkomlig från localhost eller LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Pollning stoppad: servern avvisade förfrågan (404/403).",
     "pollErrorTransient": "Fel vid hämtning av data: försöker automatiskt igen.",
-    "degraded": "Partiell data: otillgängliga källor: {sources}",
-    "degraded.source.database": "Databas",
-    "degraded.source.circuitBreaker": "Kretsbrytare",
-    "degraded.source.modelLockouts": "Modellåsningar",
-    "degraded.source.count": "Antal Anslutningar"
+    "degraded": {
+      "label": "Partiell data: otillgängliga källor: {sources}",
+      "source": {
+        "database": "Databas",
+        "circuitBreaker": "Kretsbrytare",
+        "modelLockouts": "Modellåsningar",
+        "count": "Antal Anslutningar"
+      }
+    }
   }
 }

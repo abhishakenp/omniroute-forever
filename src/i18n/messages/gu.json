@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "આ પૃષ્ઠ ફક્ત localhost અથવા LAN પરથી જ ઍક્સેસિબલ છે (LOCAL_ONLY).",
     "pollErrorStopped": "પોલિંગ બંધ: સર્વરે વિનંતી નકારી (404/403).",
     "pollErrorTransient": "ડેટા મેળવવામાં ભૂલ: આપમેળે ફરી પ્રયાસ કરી રહ્યાં છીએ.",
-    "degraded": "આંશિક ડેટા: અનુપલબ્ધ સ્રોત: {sources}",
-    "degraded.source.database": "ડેટાબેઝ",
-    "degraded.source.circuitBreaker": "સર્કિટ બ્રેકર",
-    "degraded.source.modelLockouts": "મોડેલ લોકઆઉટ",
-    "degraded.source.count": "કનેક્શન ગણતરી"
+    "degraded": {
+      "label": "આંશિક ડેટા: અનુપલબ્ધ સ્રોત: {sources}",
+      "source": {
+        "database": "ડેટાબેઝ",
+        "circuitBreaker": "સર્કિટ બ્રેકર",
+        "modelLockouts": "મોડેલ લોકઆઉટ",
+        "count": "કનેક્શન ગણતરી"
+      }
+    }
   }
 }

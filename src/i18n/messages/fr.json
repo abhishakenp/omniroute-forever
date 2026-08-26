@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Cette page n'est accessible que depuis localhost ou le LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Sondage arrêté : le serveur a rejeté la requête (404/403).",
     "pollErrorTransient": "Erreur lors de la récupération des données : nouvelle tentative automatique.",
-    "degraded": "Données partielles : sources indisponibles : {sources}",
-    "degraded.source.database": "Base de Données",
-    "degraded.source.circuitBreaker": "Disjoncteur",
-    "degraded.source.modelLockouts": "Blocages de Modèle",
-    "degraded.source.count": "Nombre de Connexions"
+    "degraded": {
+      "label": "Données partielles : sources indisponibles : {sources}",
+      "source": {
+        "database": "Base de Données",
+        "circuitBreaker": "Disjoncteur",
+        "modelLockouts": "Blocages de Modèle",
+        "count": "Nombre de Connexions"
+      }
+    }
   }
 }

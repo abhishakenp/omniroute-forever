@@ -15,9 +15,12 @@ import path from "node:path";
 
 // Signature of the corrupted-cache failure. Kept intentionally broad because
 // the same corruption surfaces through several messages (the raw mmap/SST
-// error, the Windows paging-file error code, and the misleading module-resolve
-// error emitted by Turbopack's "restore task data" step).
-const CORRUPTION_SIGNATURE = /restore task data|mmap .*SST|os error 1455|paging file/i;
+// error, the Windows paging-file error code, the misleading module-resolve
+// error emitted by Turbopack's "restore task data" step, and the generic
+// "unexpected Turbopack error" + "(stale)" tag when source files change
+// while the dev server is stopped and the persistent cache becomes outdated).
+const CORRUPTION_SIGNATURE =
+  /restore task data|mmap .*SST|os error 1455|paging file|unexpected turbopack error|\(stale\)|cache.*stale|stale.*cache/i;
 
 /**
  * True when an error message looks like a corrupted Turbopack persistent cache.
@@ -42,10 +45,7 @@ export function turbopackCacheDirs(
   cwd = process.cwd()
 ) {
   const base = path.isAbsolute(distDir) ? distDir : path.join(cwd, distDir);
-  return [
-    path.join(base, "cache", "turbopack"),
-    path.join(base, "dev", "cache", "turbopack"),
-  ];
+  return [path.join(base, "cache", "turbopack"), path.join(base, "dev", "cache", "turbopack")];
 }
 
 /**

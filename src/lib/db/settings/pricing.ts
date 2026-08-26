@@ -4,7 +4,7 @@
 
 import { getDbInstance } from "../core";
 import { backupDbFile } from "../backup";
-import { invalidateDbCache } from "../readCache";
+import { invalidateDbCache, getCachedPricing } from "../readCache";
 import { PROVIDER_ID_TO_ALIAS } from "@omniroute/open-sse/config/providerModels.ts";
 import { type JsonRecord, toRecord } from "./shared";
 
@@ -120,53 +120,71 @@ export async function getPricingWithSources(): Promise<{
   };
 }
 
-export async function getPricingForModel(provider: string, model: string) {
-  const pricing = await getPricing();
+// Pre-computed lowercase lookup map for O(1) pricing access.
+// Built once per pricing cache entry (30s TTL) instead of doing case-insensitive
+// linear scans on every getPricingForModel call (876+ calls per request).
+let _lowercasePricingMap: Map<string, Map<string, JsonRecord>> | null = null;
+let _lowercasePricingSource: PricingByProvider | null = null;
 
-  const findKeyInsensitive = <T>(
-    obj: Record<string, T> | undefined | null,
-    key: string
-  ): T | undefined => {
-    if (!obj || !key) return undefined;
-    const lowerKey = key.toLowerCase();
-    for (const [k, v] of Object.entries(obj)) {
-      if (k.toLowerCase() === lowerKey) return v;
+function getLowercasePricingMap(pricing: PricingByProvider): Map<string, Map<string, JsonRecord>> {
+  // Rebuild only if the source object changed (cache hit = skip rebuild)
+  if (_lowercasePricingMap && _lowercasePricingSource === pricing) return _lowercasePricingMap;
+
+  const providerMap = new Map<string, Map<string, JsonRecord>>();
+  for (const [providerKey, models] of Object.entries(pricing)) {
+    const lowerProvider = providerKey.toLowerCase();
+    const modelMap = new Map<string, JsonRecord>();
+    if (models && typeof models === "object") {
+      for (const [modelKey, modelData] of Object.entries(models)) {
+        modelMap.set(modelKey.toLowerCase(), modelData as JsonRecord);
+      }
     }
-    return undefined;
-  };
-
-  const pLower = (provider || "").toLowerCase();
-  let providerPricing = findKeyInsensitive<PricingModels>(pricing, pLower);
-
-  if (!providerPricing) {
-    const alias = findKeyInsensitive<string>(PROVIDER_ID_TO_ALIAS, pLower);
-    if (alias) providerPricing = findKeyInsensitive(pricing, alias);
+    providerMap.set(lowerProvider, modelMap);
   }
 
-  if (!providerPricing) {
-    for (const [id, mappedAlias] of Object.entries(PROVIDER_ID_TO_ALIAS)) {
-      if (typeof mappedAlias === "string" && mappedAlias.toLowerCase() === pLower) {
-        providerPricing = findKeyInsensitive(pricing, id);
-        if (providerPricing) break;
+  // Also add alias mappings so lookup is O(1) for aliases too
+  for (const [id, alias] of Object.entries(PROVIDER_ID_TO_ALIAS)) {
+    if (typeof alias === "string") {
+      const lowerId = id.toLowerCase();
+      const lowerAlias = alias.toLowerCase();
+      if (providerMap.has(lowerAlias) && !providerMap.has(lowerId)) {
+        providerMap.set(lowerId, providerMap.get(lowerAlias)!);
+      }
+      if (providerMap.has(lowerId) && !providerMap.has(lowerAlias)) {
+        providerMap.set(lowerAlias, providerMap.get(lowerId)!);
       }
     }
   }
 
-  if (!providerPricing) {
+  _lowercasePricingMap = providerMap;
+  _lowercasePricingSource = pricing;
+  return providerMap;
+}
+
+export async function getPricingForModel(provider: string, model: string) {
+  // Hot path: buildAutoCandidates calls this once per candidate (876+ times).
+  // Use the cached singleton pricing map with O(1) lowercase lookup.
+  const pricing = (await getCachedPricing()) as PricingByProvider;
+  const providerMap = getLowercasePricingMap(pricing);
+
+  const pLower = (provider || "").toLowerCase();
+  let modelMap = providerMap.get(pLower);
+
+  // Try -cn variant (e.g. "groq-cn" → "groq")
+  if (!modelMap) {
     const np = pLower.replace(/-cn$/, "");
-    if (np && np !== pLower) {
-      providerPricing = findKeyInsensitive(pricing, np);
-    }
+    if (np && np !== pLower) modelMap = providerMap.get(np);
   }
 
-  if (!providerPricing) return null;
+  if (!modelMap) return null;
 
   const mLower = (model || "").toLowerCase();
-  let modelPricing = findKeyInsensitive<JsonRecord>(providerPricing, mLower);
+  let modelPricing = modelMap.get(mLower);
 
+  // Try dot→hyphen variant (e.g. "gpt-4.1" → "gpt-4-1")
   if (!modelPricing) {
     const hyphenModel = mLower.replace(/\./g, "-");
-    modelPricing = findKeyInsensitive(providerPricing, hyphenModel);
+    if (hyphenModel !== mLower) modelPricing = modelMap.get(hyphenModel);
   }
 
   return modelPricing || null;

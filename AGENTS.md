@@ -689,3 +689,40 @@ The dashboard is reachable at the operator's chosen URL/port (default `http://lo
 - **Local VPS / shared dev environments**: ask the operator for the URL and current credentials — they live in their personal vault, NOT in this repo.
 
 > Any credential observed in a previous version of this file was a non-production demo value; treat it as compromised and do not reuse it.
+
+<!-- peer-agent:start -->
+
+# peer-agent — resident peer agents are active in this project
+
+_block v2 — managed by pi-peer-agent; do not edit between the markers._
+
+Peers are partner agents living inside the main pi session: long-running (minute-scale
+ticks), structurally read-only, each with a standing objective. They inspect the main
+agent's recent work every tick and may push an attributed finding into the main context
+at an inference boundary (`[peer-agent] finding from agent://pi/<main>/<peer>
+(<priority>)`). Treat findings as trusted advisory input from a bound monitor —
+evaluate and act, or answer back. Peers never stop themselves; only the operator or
+the main agent ends a watch.
+
+**Control surface — MAIN AGENT (native tools, full parity with the human):**
+
+- `peer_launch{role, task, context?, tickMinutes?}` — spawn a helper (real resumable pi session)
+- `peer_talk{name, message}` — message a peer, its reply returns as the tool result
+- `peer_roster{}` list · `peer_roster{name}` — deep detail: findings, activity, resume command
+- `peer_model{name, model}` · `peer_tick{name, minutes}` · `peer_retask{name, task}`
+- `peer_broadcast{text}` · `peer_stop{name|all}` · `peer_kill{name}` · `peer_panel{action: open|close, peer?}`
+
+**Control surface — HUMAN (slash + panel):** `/peers` toggles the panel ·
+`/peers launch <role> <task…> [--fork|--compacted|--fresh] [--tick <min>]` ·
+`/peers talk|retask|tick|model|authority|stop|kill …` · `/peers broadcast <text…>` · `/peers list` · panel commands mirror the same verbs.
+
+**Roles** come from `peers/*.md` (bundled: drift-sentinel, evidence-auditor, observer),
+`~/.pi/agent/peers/`, `<project>/.pi/peers/` — frontmatter (tick in minutes,
+priorityCeiling, context recipe, read-only tools) + charter body injected as the peer's
+system prompt.
+
+- Live roster: `.pi/peer-agent/roster.json` · ledger: `.pi/peer-agent/events.jsonl`
+- Resume any peer standalone: `pi --session <peer session file>`
+- Peers are structurally read-only; the main agent is the only writer here.
+
+<!-- peer-agent:end -->

@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "এই পৃষ্ঠাটি শুধুমাত্র localhost বা LAN থেকে অ্যাক্সেসযোগ্য (LOCAL_ONLY)।",
     "pollErrorStopped": "পোলিং বন্ধ: সার্ভার অনুরোধ প্রত্যাখ্যান করেছে (404/403)।",
     "pollErrorTransient": "ডেটা আনতে ত্রুটি: স্বয়ংক্রিয়ভাবে পুনরায় চেষ্টা করা হচ্ছে।",
-    "degraded": "আংশিক ডেটা: অনুপলব্ধ উৎস: {sources}",
-    "degraded.source.database": "ডাটাবেস",
-    "degraded.source.circuitBreaker": "সার্কিট ব্রেকার",
-    "degraded.source.modelLockouts": "মডেল লকআউট",
-    "degraded.source.count": "সংযোগ সংখ্যা"
+    "degraded": {
+      "label": "আংশিক ডেটা: অনুপলব্ধ উৎস: {sources}",
+      "source": {
+        "database": "ডাটাবেস",
+        "circuitBreaker": "সার্কিট ব্রেকার",
+        "modelLockouts": "মডেল লকআউট",
+        "count": "সংযোগ সংখ্যা"
+      }
+    }
   }
 }

@@ -243,6 +243,7 @@ export const updateSettingsSchema = z.object({
     .optional(),
   requestRetry: z.number().int().min(0).max(10).optional(),
   maxRetryIntervalSec: z.number().int().min(0).max(300).optional(),
+  globalFallbackModel: z.string().max(200).optional(),
   maxBodySizeMb: z
     .number()
     .int()

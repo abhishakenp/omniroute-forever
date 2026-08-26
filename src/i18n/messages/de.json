@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Diese Seite ist nur von localhost oder LAN aus zugänglich (LOCAL_ONLY).",
     "pollErrorStopped": "Abfrage gestoppt: Der Server hat die Anfrage abgelehnt (404/403).",
     "pollErrorTransient": "Fehler beim Abrufen der Daten: automatischer erneuter Versuch.",
-    "degraded": "Teildaten: nicht verfügbare Quellen: {sources}",
-    "degraded.source.database": "Datenbank",
-    "degraded.source.circuitBreaker": "Leistungsschalter",
-    "degraded.source.modelLockouts": "Modellsperren",
-    "degraded.source.count": "Verbindungsanzahl"
+    "degraded": {
+      "label": "Teildaten: nicht verfügbare Quellen: {sources}",
+      "source": {
+        "database": "Datenbank",
+        "circuitBreaker": "Leistungsschalter",
+        "modelLockouts": "Modellsperren",
+        "count": "Verbindungsanzahl"
+      }
+    }
   }
 }

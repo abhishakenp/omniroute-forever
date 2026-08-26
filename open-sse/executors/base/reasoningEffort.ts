@@ -29,7 +29,11 @@ import {
  * accept xhigh. For OpenAI-shape providers, max normalizes to xhigh by default
  * and falls back to high only for explicit xhigh opt-outs.
  */
-export const MISTRAL_NO_REASONING_EFFORT_PATTERN = /devstral/i;
+// Mistral models that reject reasoning_effort: ALL current Mistral chat models
+// return 400 "reasoning_effort is not enabled for this model" except those
+// explicitly opted in. Verified via logs: mistral-large-latest, mistral-medium-3-5,
+// codestral-latest, devstral-latest all reject. Strip pre-dispatch for all.
+export const MISTRAL_NO_REASONING_EFFORT_PATTERN = /.*/i;
 // GitHub Copilot Claude routing is granular (upstream port: decolua/9router#791):
 //   ✅ Pass through — Claude Opus 4.6, Claude Sonnet 4.6. Copilot routes both to
 //      Anthropic's chat/completions surface, which honors reasoning_effort and
@@ -261,8 +265,17 @@ export function sanitizeReasoningEffortForProvider(
 
   const githubOptIn =
     provider === "github" && GITHUB_REASONING_EFFORT_OPT_IN_PATTERN.test(modelStr);
+  // Cohere: all current models return 422 "reasoning_effort 'medium' and 'low'
+  // are not supported. Use 'high' instead" — and even high is not reliably accepted.
+  // Strip pre-dispatch for all cohere models.
+  const cohereRejecting = provider === "cohere";
+  // Groq: non-reasoning models (qwen3.6-27b, etc.) return 400 "reasoning_effort
+  // must be one of `none` or `default`". Strip for models not known to support it.
+  const groqRejecting = provider === "groq" && !/reasoning|think/i.test(modelStr);
   const rejecting =
     (provider === "mistral" && MISTRAL_NO_REASONING_EFFORT_PATTERN.test(modelStr)) ||
+    cohereRejecting ||
+    groqRejecting ||
     (provider === "github" && !githubOptIn && GITHUB_NO_REASONING_EFFORT_PATTERN.test(modelStr));
   if (rejecting) {
     log?.info?.(

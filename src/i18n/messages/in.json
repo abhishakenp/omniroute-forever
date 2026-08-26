@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Halaman ini hanya dapat diakses dari localhost atau LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Polling dihentikan: server menolak permintaan (404/403).",
     "pollErrorTransient": "Kesalahan mengambil data: mencoba lagi secara otomatis.",
-    "degraded": "Data sebagian: sumber tidak tersedia: {sources}",
-    "degraded.source.database": "Basis Data",
-    "degraded.source.circuitBreaker": "Circuit Breaker",
-    "degraded.source.modelLockouts": "Penguncian Model",
-    "degraded.source.count": "Jumlah Koneksi"
+    "degraded": {
+      "label": "Data sebagian: sumber tidak tersedia: {sources}",
+      "source": {
+        "database": "Basis Data",
+        "circuitBreaker": "Circuit Breaker",
+        "modelLockouts": "Penguncian Model",
+        "count": "Jumlah Koneksi"
+      }
+    }
   }
 }

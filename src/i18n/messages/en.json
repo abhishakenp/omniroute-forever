@@ -12320,10 +12320,14 @@
     "pollErrorLocalOnly": "This page is only accessible from localhost or LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Polling stopped: the server rejected the request (404/403).",
     "pollErrorTransient": "Error fetching data: retrying automatically.",
-    "degraded": "Partial data: unavailable sources: {sources}",
-    "degraded.source.database": "Database",
-    "degraded.source.circuitBreaker": "Circuit Breaker",
-    "degraded.source.modelLockouts": "Model Lockouts",
-    "degraded.source.count": "Connection Count"
+    "degraded": {
+      "label": "Partial data: unavailable sources: {sources}",
+      "source": {
+        "database": "Database",
+        "circuitBreaker": "Circuit Breaker",
+        "modelLockouts": "Model Lockouts",
+        "count": "Connection Count"
+      }
+    }
   }
 }

@@ -1,4 +1,8 @@
-import { errorResponse, unavailableResponse, errorResponseWithComboDiagnostics } from "../../utils/error.ts";
+import {
+  errorResponse,
+  unavailableResponse,
+  errorResponseWithComboDiagnostics,
+} from "../../utils/error.ts";
 import { BudgetExceededError, selectProvider as selectAutoProvider } from "../autoCombo/engine.ts";
 import {
   resolveRequestModePack,
@@ -118,8 +122,7 @@ export async function resolveAutoStrategyOrder(
     // registry/capability rows honestly report toolCalling:false.
     const filtered = eligibleTargets.filter(
       (target) =>
-        supportsToolCalling(target.modelStr) ||
-        providerSupportsEmulatedToolCalling(target.provider)
+        supportsToolCalling(target.modelStr) || providerSupportsEmulatedToolCalling(target.provider)
     );
     if (filtered.length > 0) {
       eligibleTargets = filtered;
@@ -265,7 +268,20 @@ export async function resolveAutoStrategyOrder(
   try {
     const { getLKGP } = await import("../../../src/lib/localDb");
     const lkgp = await getLKGP(combo.name, combo.id || combo.name);
-    if (lkgp) lastKnownGoodProvider = lkgp.provider;
+    if (lkgp) {
+      // Validate that the LKGP provider still exists in the registry.
+      // Stale LKGP entries (e.g. disabled providers like devin-cli) must not
+      // cause the router to select a non-existent provider.
+      const { REGISTRY } = await import("../../config/providers/index.ts");
+      if (REGISTRY[lkgp.provider]) {
+        lastKnownGoodProvider = lkgp.provider;
+      } else {
+        log.warn(
+          "COMBO",
+          `LKGP provider "${lkgp.provider}" is not in the registry — ignoring stale LKGP entry`
+        );
+      }
+    }
   } catch (err) {
     log.warn("COMBO", "Failed to retrieve Last Known Good Provider. This is non-fatal.", { err });
   }

@@ -19,7 +19,7 @@ import { handleFusionChat, type FusionTuning } from "../fusion.ts";
 import { parseModel } from "../model.ts";
 import { handlePipelineChat, type PipelineStep } from "../pipeline.ts";
 import type { resolveComboSetupConfig } from "../comboConfig.ts";
-import { clampComboDepth, MAX_GLOBAL_ATTEMPTS, resolveDelayMs } from "./comboPredicates.ts";
+import { clampComboDepth, resolveDelayMs } from "./comboPredicates.ts";
 import { resolveComboRuntimeUnits, resolveComboTargets } from "./comboStructure.ts";
 import { isComboModelVisible } from "./comboVisibility.ts";
 import { buildFusionHandleSingleModel, extractFusionPanelSpec } from "./fusionPanel.ts";
@@ -171,7 +171,7 @@ function buildDefaultNesting(
       maxDepth: clampComboDepth(config.maxComboDepth),
       visitedComboNames: [comboName],
       rootComboName: comboName,
-      attemptBudget: { count: 0, limit: MAX_GLOBAL_ATTEMPTS },
+      attemptBudget: { count: 0, limit: Number.MAX_SAFE_INTEGER },
     }
   );
 }

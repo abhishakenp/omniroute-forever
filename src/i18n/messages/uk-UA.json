@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Ця сторінка доступна лише з localhost або LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Опитування зупинено: сервер відхилив запит (404/403).",
     "pollErrorTransient": "Помилка отримання даних: автоматичний повтор.",
-    "degraded": "Часткові дані: недоступні джерела: {sources}",
-    "degraded.source.database": "База Даних",
-    "degraded.source.circuitBreaker": "Автоматичний Вимикач",
-    "degraded.source.modelLockouts": "Блокування Моделі",
-    "degraded.source.count": "Кількість З'єднань"
+    "degraded": {
+      "label": "Часткові дані: недоступні джерела: {sources}",
+      "source": {
+        "database": "База Даних",
+        "circuitBreaker": "Автоматичний Вимикач",
+        "modelLockouts": "Блокування Моделі",
+        "count": "Кількість З'єднань"
+      }
+    }
   }
 }

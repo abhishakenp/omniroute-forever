@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Tato stránka je přístupná pouze z localhost nebo LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Dotazování zastaveno: server odmítl požadavek (404/403).",
     "pollErrorTransient": "Chyba při načítání dat: automatické opakování.",
-    "degraded": "Částečná data: nedostupné zdroje: {sources}",
-    "degraded.source.database": "Databáze",
-    "degraded.source.circuitBreaker": "Jistič",
-    "degraded.source.modelLockouts": "Uzamčení Modelu",
-    "degraded.source.count": "Počet Připojení"
+    "degraded": {
+      "label": "Částečná data: nedostupné zdroje: {sources}",
+      "source": {
+        "database": "Databáze",
+        "circuitBreaker": "Jistič",
+        "modelLockouts": "Uzamčení Modelu",
+        "count": "Počet Připojení"
+      }
+    }
   }
 }

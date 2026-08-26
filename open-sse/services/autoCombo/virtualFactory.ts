@@ -142,36 +142,47 @@ function hasProviderSpecificSessionData(conn: VirtualFactoryConn): boolean {
 
 function hasUsableConnectionCredential(conn: VirtualFactoryConn): boolean {
   const hasApiKey = typeof conn.apiKey === "string" && conn.apiKey.trim().length > 0;
-  return hasApiKey || hasUsableOAuthToken(conn) || hasProviderSpecificSessionData(conn);
+  if (hasApiKey || hasUsableOAuthToken(conn) || hasProviderSpecificSessionData(conn)) return true;
+  // Keyless providers (g4f-*, hackclub, pollinations, etc.) have empty API keys
+  // but are valid free-tier providers. Accept them if the registry marks them
+  // with hasFree: true, passthroughModels: true, or authType: "optional"
+  // (indicating a no-key free tier).
+  try {
+    const registry = getProviderRegistry();
+    const providerInfo = registry[conn.provider];
+    if (
+      providerInfo?.hasFree === true ||
+      providerInfo?.passthroughModels === true ||
+      providerInfo?.authType === "optional"
+    )
+      return true;
+  } catch {
+    /* ignore */
+  }
+  return false;
 }
 
 const SYNTHETIC_NOAUTH_CONNECTION_ID = RESILIENCE_NOAUTH_CONNECTION_ID;
 
-// Allowlist of no-auth (keyless) providers permitted to enter the `auto`/`auto-*`
-// candidate pool. Narrowed to the backends verified to answer without any
-// configuration on our reference egress (VPS .15): `opencode` and `felo-web`
-// both return 200 there, while duckduckgo-web (429/VQD rate limit), theoldllm
-// (403 Vercel egress block), chipotle (502), aihorde (401, anon key rejected)
-// and the others are unreliable. The excluded providers stay fully usable via
-// direct `<alias>/<model>` calls — they are just kept OUT of auto-routing until
-// re-verified. Re-add an id here to bring it back into every auto/* pool.
-//
-// Scope (operator decision 2026-07-24, refs #8183/#6453/#7032): this allowlist
-// targets public-HTTP-egress reliability for the category/tier and flat-variant
-// `auto/*` pools (auto/best-free, auto/coding:fast, ...). It does NOT apply to
-// `auto/<family>` pools (auto/glm, auto/zai, ...) — a family combo is an
-// identity selector ("whatever genuinely serves GLM"), not a reliability-curated
-// pool, so it admits any no-auth backend that genuinely serves the family (e.g.
-// auggie, a local CLI subprocess with zero HTTP egress, belongs in auto/glm
-// regardless of this list). See the `bypassAllowlist` param below.
-const AUTO_COMBO_NOAUTH_ALLOWLIST = new Set<string>(["opencode", "felo-web"]);
+// All no-auth (keyless) providers are permitted in the `auto`/`auto-*`
+// candidate pool. The previous narrow allowlist (opencode + felo-web only)
+// starved auto/best-free of provider diversity — when groq rate-limited, the
+// combo had only 2-3 candidates left. The combo's failover logic handles
+// unreliable backends; excluding them entirely is worse than letting them
+// fail over. Direct `<alias>/<model>` calls still work regardless.
+const AUTO_COMBO_NOAUTH_ALLOWLIST: Set<string> | null = null;
 
 function isChatAutoComboNoAuthProvider(
   providerDef: NoAuthProviderDefinition,
   bypassAllowlist: boolean
 ): boolean {
   if (providerDef.noAuth !== true) return false;
-  if (!bypassAllowlist && !AUTO_COMBO_NOAUTH_ALLOWLIST.has(providerDef.id)) return false;
+  if (
+    !bypassAllowlist &&
+    AUTO_COMBO_NOAUTH_ALLOWLIST !== null &&
+    !AUTO_COMBO_NOAUTH_ALLOWLIST.has(providerDef.id)
+  )
+    return false;
   if (!Array.isArray(providerDef.serviceKinds) || providerDef.serviceKinds.length === 0)
     return true;
   return providerDef.serviceKinds.includes("llm");
@@ -427,10 +438,7 @@ export async function createVirtualAutoCombo(
   for (const conn of [...connections, ...disabledNoAuthConnections]) {
     connectionsById.set(conn.id, conn);
   }
-  const resilienceFilteredPool = filterResilienceBlockedCandidates(
-    candidatePool,
-    connectionsById
-  );
+  const resilienceFilteredPool = filterResilienceBlockedCandidates(candidatePool, connectionsById);
   if (resilienceFilteredPool !== candidatePool) {
     candidatePool.length = 0;
     candidatePool.push(...resilienceFilteredPool);

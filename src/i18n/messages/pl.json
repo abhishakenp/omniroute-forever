@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Ta strona jest dostępna tylko z localhost lub LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Odpytywanie zatrzymane: serwer odrzucił żądanie (404/403).",
     "pollErrorTransient": "Błąd pobierania danych: automatyczne ponowienie.",
-    "degraded": "Dane częściowe: niedostępne źródła: {sources}",
-    "degraded.source.database": "Baza Danych",
-    "degraded.source.circuitBreaker": "Wyłącznik",
-    "degraded.source.modelLockouts": "Blokady Modelu",
-    "degraded.source.count": "Liczba Połączeń"
+    "degraded": {
+      "label": "Dane częściowe: niedostępne źródła: {sources}",
+      "source": {
+        "database": "Baza Danych",
+        "circuitBreaker": "Wyłącznik",
+        "modelLockouts": "Blokady Modelu",
+        "count": "Liczba Połączeń"
+      }
+    }
   }
 }

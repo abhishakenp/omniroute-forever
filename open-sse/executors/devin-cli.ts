@@ -3,12 +3,19 @@
  * via the Agent Client Protocol (ACP) JSON-RPC 2.0 over stdio.
  *
  * Protocol flow:
- *   1. Spawn `devin acp --agent-type summarizer` as a subprocess
- *      (summarizer = no file-system tools → pure text replies, safe for proxy use)
+ *   1. Spawn `devin acp` as a subprocess (default agent type — full tool calling)
  *   2. Send: initialize → session/new (with model + cwd) → session/prompt
- *   3. Receive: session/update notifications (streaming text deltas)
- *   4. Emit deltas as OpenAI-compatible SSE chunks
+ *   3. Receive: session/update notifications (streaming text deltas + tool events)
+ *   4. Emit text deltas as OpenAI-compatible SSE chunks
  *   5. Kill subprocess on [DONE] or error
+ *
+ * Agent type:
+ *   The default agent (no --agent-type flag) has full tool calling capabilities
+ *   (exec, edit, read, etc.). Devin CLI executes tools internally and returns
+ *   the final text response. This enables models like swe-1-7-lightning to
+ *   perform real agent work (file edits, shell commands) through the proxy.
+ *   Tool call/result notifications in session/update are silently ignored —
+ *   only agent_message_chunk text deltas are streamed to the client.
  *
  * Authentication:
  *   credentials.apiKey / accessToken  → passed as WINDSURF_API_KEY env var to devin.
@@ -84,7 +91,7 @@ function rpc(method: string, params: unknown, id?: number): string {
 type OpenAIMsg = { role?: string; content?: unknown };
 
 function buildPromptText(messages: OpenAIMsg[]): string {
-  // Devin CLI (summarizer mode) receives a single text prompt.
+  // Devin CLI (default agent mode) receives a single text prompt.
   // We inline the whole conversation so the model has full context.
   const lines: string[] = [];
   for (const m of messages) {
@@ -153,7 +160,7 @@ export class DevinCliExecutor extends BaseExecutor {
         const env: NodeJS.ProcessEnv = { ...process.env };
         if (apiKey) env.WINDSURF_API_KEY = apiKey;
 
-        const child = spawn(devinBin, ["acp", "--agent-type", "summarizer"], {
+        const child = spawn(devinBin, ["acp"], {
           env,
           stdio: ["pipe", "pipe", "pipe"],
           windowsHide: true,

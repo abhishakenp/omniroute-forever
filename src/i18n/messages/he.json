@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "דף זה נגיש רק מ-localhost או רשת מקומית (LOCAL_ONLY).",
     "pollErrorStopped": "הסקר הופסק: השרת דחה את הבקשה (404/403).",
     "pollErrorTransient": "שגיאה באחזור נתונים: ניסיון חוזר אוטומטי.",
-    "degraded": "נתונים חלקיים: מקורות לא זמינים: {sources}",
-    "degraded.source.database": "מסד נתונים",
-    "degraded.source.circuitBreaker": "נתיק מעגל",
-    "degraded.source.modelLockouts": "נעילות מודל",
-    "degraded.source.count": "מספר חיבורים"
+    "degraded": {
+      "label": "נתונים חלקיים: מקורות לא זמינים: {sources}",
+      "source": {
+        "database": "מסד נתונים",
+        "circuitBreaker": "נתיק מעגל",
+        "modelLockouts": "נעילות מודל",
+        "count": "מספר חיבורים"
+      }
+    }
   }
 }

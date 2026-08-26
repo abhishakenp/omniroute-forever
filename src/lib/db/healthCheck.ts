@@ -5,10 +5,7 @@ type SqliteDatabase = SqliteAdapter;
 type JsonRecord = Record<string, unknown>;
 
 export type DbHealthIssueType =
-  | "integrity_check_failed"
-  | "broken_reference"
-  | "stale_snapshot"
-  | "invalid_state";
+  "integrity_check_failed" | "broken_reference" | "stale_snapshot" | "invalid_state";
 
 export interface DbHealthIssue {
   type: DbHealthIssueType;
@@ -383,8 +380,7 @@ function repairInvalidJsonRows(
 function getSchemaVersionIssueCount(db: SqliteDatabase, expectedSchemaVersion: string): number {
   if (!hasRows(db, "db_meta")) return 0;
   const row = db.prepare("SELECT value FROM db_meta WHERE key = 'schema_version'").get() as
-    | { value?: string | null }
-    | undefined;
+    { value?: string | null } | undefined;
   const current = typeof row?.value === "string" ? row.value : null;
   return current === expectedSchemaVersion ? 0 : 1;
 }
@@ -430,6 +426,41 @@ export function runDbHealthCheck(
         description: "SQLite integrity_check returned a non-ok status.",
         count: 1,
       });
+      // GAP 21: Auto-restore from latest backup on integrity failure.
+      // This is the last line of defense — if the DB is corrupt, restore from backup.
+      if (autoRepair) {
+        try {
+          const path = require("path");
+          const fs = require("fs");
+          const { DB_BACKUPS_DIR, DATA_DIR } = require("./backup");
+          const backupDir = DB_BACKUPS_DIR || path.join(DATA_DIR, "db_backups");
+          if (fs.existsSync(backupDir)) {
+            const backups = fs
+              .readdirSync(backupDir)
+              .filter((f: string) => f.endsWith(".sqlite"))
+              .map((f: string) => ({
+                name: f,
+                mtime: fs.statSync(path.join(backupDir, f)).mtimeMs,
+              }))
+              .sort((a: any, b: any) => b.mtime - a.mtime);
+            if (backups.length > 0) {
+              console.warn(`[DB] Integrity check failed — auto-restoring from ${backups[0].name}`);
+              // Close current DB, copy backup over, reopen
+              try {
+                db.close();
+              } catch {}
+              const { SQLITE_FILE } = require("./backup");
+              const dbPath = SQLITE_FILE || path.join(DATA_DIR, "storage.sqlite");
+              fs.copyFileSync(path.join(backupDir, backups[0].name), dbPath);
+              console.warn(`[DB] Restored from backup — restart required to take effect`);
+              // Mark for restart — the process should exit and let launchd restart it
+              process.exit(100); // exit code 100 = "DB restored, restart needed"
+            }
+          }
+        } catch (restoreErr: any) {
+          console.warn(`[DB] Auto-restore failed: ${restoreErr?.message || restoreErr}`);
+        }
+      }
     }
   }
 

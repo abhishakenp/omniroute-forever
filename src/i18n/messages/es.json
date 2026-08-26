@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Esta página solo es accesible desde localhost o LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Sondeo detenido: el servidor rechazó la solicitud (404/403).",
     "pollErrorTransient": "Error al obtener datos: reintentando automáticamente.",
-    "degraded": "Datos parciales: fuentes no disponibles: {sources}",
-    "degraded.source.database": "Base de Datos",
-    "degraded.source.circuitBreaker": "Disyuntor",
-    "degraded.source.modelLockouts": "Bloqueos de Modelo",
-    "degraded.source.count": "Cantidad de Conexiones"
+    "degraded": {
+      "label": "Datos parciales: fuentes no disponibles: {sources}",
+      "source": {
+        "database": "Base de Datos",
+        "circuitBreaker": "Disyuntor",
+        "modelLockouts": "Bloqueos de Modelo",
+        "count": "Cantidad de Conexiones"
+      }
+    }
   }
 }

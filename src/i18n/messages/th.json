@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "หน้านี้เข้าถึงได้เฉพาะจาก localhost หรือ LAN เท่านั้น (LOCAL_ONLY)",
     "pollErrorStopped": "หยุดการสำรวจ: เซิร์ฟเวอร์ปฏิเสธคำขอ (404/403)",
     "pollErrorTransient": "เกิดข้อผิดพลาดในการดึงข้อมูล: กำลังลองใหม่โดยอัตโนมัติ",
-    "degraded": "ข้อมูลบางส่วน: แหล่งข้อมูลที่ไม่พร้อมใช้งาน: {sources}",
-    "degraded.source.database": "ฐานข้อมูล",
-    "degraded.source.circuitBreaker": "เซอร์กิตเบรกเกอร์",
-    "degraded.source.modelLockouts": "การล็อกเอาต์โมเดล",
-    "degraded.source.count": "จำนวนการเชื่อมต่อ"
+    "degraded": {
+      "label": "ข้อมูลบางส่วน: แหล่งข้อมูลที่ไม่พร้อมใช้งาน: {sources}",
+      "source": {
+        "database": "ฐานข้อมูล",
+        "circuitBreaker": "เซอร์กิตเบรกเกอร์",
+        "modelLockouts": "การล็อกเอาต์โมเดล",
+        "count": "จำนวนการเชื่อมต่อ"
+      }
+    }
   }
 }

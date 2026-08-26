@@ -18,8 +18,10 @@
  */
 import type { AutoVariant } from "./autoPrefix";
 import { classifyTier } from "../tierResolver";
+import { isFreeModel, providerHasFreeModels } from "@/shared/utils/freeModels";
 import { getResolvedModelCapabilities } from "@/lib/modelCapabilities";
 import { isVisionModelId } from "@/shared/constants/visionModels";
+import { getProviderRegistry } from "./providerRegistryAccessor";
 
 export type AutoCategory = "coding" | "reasoning" | "vision" | "chat" | "multimodal";
 export type AutoTier = "fast" | "cheap" | "floor" | "free" | "reliable" | "pro";
@@ -128,7 +130,7 @@ export function buildAutoCandidateFilter(
     });
   }
   if (tier === "free") {
-    checks.push((c) => safeClassifyTier(c) === "free");
+    checks.push((c) => isFreeCandidate(c));
   }
   if (tier === "pro") {
     checks.push((c) => safeClassifyTier(c) === "premium");
@@ -144,4 +146,43 @@ function safeClassifyTier(c: PoolCandidate): string {
   } catch {
     return "cheap";
   }
+}
+
+/**
+ * A candidate is "free" when ANY of:
+ * 1. `classifyTier` says free (explicit freeProviders list, pricing = 0, etc.)
+ * 2. `isFreeModel` says free (`:free` suffix, zero pricing, or in FREE_MODEL_BUDGETS catalog)
+ * 3. `providerHasFreeModels` says the provider has free models (catalog-level check)
+ *
+ * The catalog check (#3) is the broadest — it includes 81+ providers like mistral,
+ * cohere, openrouter, hyperbolic, etc. that have free-tier models but aren't in the
+ * legacy `freeProviders` list. Without this, auto/best-free only sees ~3 candidates
+ * (groq + no-auth providers) and exhausts them instantly under load.
+ */
+function isFreeCandidate(c: PoolCandidate): boolean {
+  if (safeClassifyTier(c) === "free") return true;
+  try {
+    if (isFreeModel(c.provider, { id: c.model })) return true;
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (providerHasFreeModels(c.provider)) return true;
+  } catch {
+    /* ignore */
+  }
+  // Provider definition has hasFree: true or passthroughModels: true (g4f-*,
+  // hackclub, pollinations, etc.) or authType: "optional" (keyless providers).
+  // These providers may not be in the FREE_MODEL_BUDGETS catalog under their
+  // g4f-* ID, but the registry marks them as having a free tier.
+  try {
+    const registry = getProviderRegistry();
+    const entry = registry[c.provider];
+    if (entry?.hasFree === true) return true;
+    if (entry?.passthroughModels === true) return true;
+    if (entry?.authType === "optional") return true;
+  } catch {
+    /* ignore */
+  }
+  return false;
 }

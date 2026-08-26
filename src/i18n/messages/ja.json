@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "このページはlocalhostまたはLANからのみアクセス可能です(LOCAL_ONLY)。",
     "pollErrorStopped": "ポーリング停止:サーバーがリクエストを拒否しました(404/403)。",
     "pollErrorTransient": "データ取得エラー:自動的に再試行します。",
-    "degraded": "部分データ:利用できないソース: {sources}",
-    "degraded.source.database": "データベース",
-    "degraded.source.circuitBreaker": "サーキットブレーカー",
-    "degraded.source.modelLockouts": "モデルロックアウト",
-    "degraded.source.count": "接続数"
+    "degraded": {
+      "label": "部分データ:利用できないソース: {sources}",
+      "source": {
+        "database": "データベース",
+        "circuitBreaker": "サーキットブレーカー",
+        "modelLockouts": "モデルロックアウト",
+        "count": "接続数"
+      }
+    }
   }
 }

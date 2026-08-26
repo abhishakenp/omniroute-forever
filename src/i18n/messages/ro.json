@@ -12412,10 +12412,14 @@
     "pollErrorLocalOnly": "Această pagină este accesibilă doar din localhost sau LAN (LOCAL_ONLY).",
     "pollErrorStopped": "Interogare oprită: serverul a respins cererea (404/403).",
     "pollErrorTransient": "Eroare la preluarea datelor: reîncercare automată.",
-    "degraded": "Date parțiale: surse indisponibile: {sources}",
-    "degraded.source.database": "Bază de Date",
-    "degraded.source.circuitBreaker": "Întrerupător de Circuit",
-    "degraded.source.modelLockouts": "Blocaje Model",
-    "degraded.source.count": "Număr de Conexiuni"
+    "degraded": {
+      "label": "Date parțiale: surse indisponibile: {sources}",
+      "source": {
+        "database": "Bază de Date",
+        "circuitBreaker": "Întrerupător de Circuit",
+        "modelLockouts": "Blocaje Model",
+        "count": "Număr de Conexiuni"
+      }
+    }
   }
 }
