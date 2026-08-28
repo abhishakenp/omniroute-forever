@@ -18,7 +18,8 @@ import {
 import { setNoLog } from "../compliance/noLog";
 import { resolveModelAlias } from "@omniroute/open-sse/services/modelDeprecation.ts";
 import { getProviderAlias, resolveProviderId } from "@/shared/constants/providers";
-import { getSyncedAvailableModelsByConnection, getCustomModels, getModelIsHidden } from "./models";
+import { getCustomModels, getModelIsHidden } from "./models";
+import { getCachedSyncedAvailableModelsByConnection } from "./readCache";
 import {
   CLAUDE_CODE_PROVIDER_PREFIXES,
   preferClaudeCodeForUnprefixedClaudeModels,
@@ -1445,7 +1446,9 @@ export async function isModelAllowedForKey(
       const shortModelId = lookupTarget?.modelId || effectiveModelId.split("/").slice(1).join("/");
       if (!providerId || !shortModelId) return false;
 
-      const syncedModelsByConnection = await getSyncedAvailableModelsByConnection(providerId);
+      const syncedModelsByConnection = (await getCachedSyncedAvailableModelsByConnection(
+        providerId
+      )) as Record<string, import("./models").SyncedAvailableModel[]>;
       const customModels = await getCustomModels(providerId);
 
       // Combine synced and custom models

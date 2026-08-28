@@ -243,6 +243,29 @@ const comboPromoteDeps = { updateCombo, info: log.info, warn: log.warn };
 
 export { shouldTripProviderBreakerForResult } from "./chatPredicates";
 
+// ── Exhausted-combo cache ──────────────────────────────────────────────────
+// When a combo returns 503 (ALL_TARGETS_SKIPPED), cache that result for 30s.
+// Subsequent requests to the same combo return 503 immediately without
+// entering the combo pipeline (which iterates all connections, runs pre-dispatch
+// filters, does set retries, tries global fallback, etc). This prevents
+// CPU spikes when clients retry exhausted combos in a tight loop.
+const EXHAUSTED_COMBO_TTL_MS = 30_000;
+const exhaustedComboCache = new Map<string, { expiresAt: number }>();
+
+function isComboExhausted(comboName: string): boolean {
+  const entry = exhaustedComboCache.get(comboName);
+  if (!entry) return false;
+  if (Date.now() > entry.expiresAt) {
+    exhaustedComboCache.delete(comboName);
+    return false;
+  }
+  return true;
+}
+
+function markComboExhausted(comboName: string): void {
+  exhaustedComboCache.set(comboName, { expiresAt: Date.now() + EXHAUSTED_COMBO_TTL_MS });
+}
+
 async function handleChatImplementation(
   request: any,
   clientRawRequest: any = null,
@@ -695,6 +718,18 @@ async function handleChatImplementation(
       if (filtered instanceof Response) return filtered;
       combo = filtered;
     }
+    // Exhausted-combo fast path: if this combo recently returned 503
+    // (ALL_TARGETS_SKIPPED), return 503 immediately without entering the
+    // combo pipeline. Prevents CPU spikes when clients retry exhausted
+    // combos in a tight loop (e.g. prime-agent polling auto/best-free
+    // while OpenRouter is down).
+    if (isComboExhausted(combo.name)) {
+      log.info("CHAT", `Combo "${combo.name}" exhausted (cached) — returning 503 immediately`);
+      return errorResponse(
+        HTTP_STATUS.SERVICE_UNAVAILABLE,
+        "Service temporarily unavailable: combo exhausted (cached)"
+      );
+    }
     log.info(
       "CHAT",
       `Combo "${modelStr}" [${combo.strategy || "priority"}] with ${combo.models.length} models`
@@ -816,6 +851,7 @@ async function handleChatImplementation(
         : undefined;
     telemetry.endPhase();
 
+    let handleChatImplEmergencyFallbackTried = false;
     // Context-relay keeps generation in combo.ts, but handoff injection lives here
     // because only this layer knows which connectionId was actually selected.
     const response = await (handleComboChat as any)({
@@ -905,7 +941,7 @@ async function handleChatImplementation(
       [502, 503].includes(response.status) &&
       typeof (settings as any)?.globalFallbackModel === "string" &&
       (settings as any).globalFallbackModel.trim() &&
-      !(runtimeOptions as any)?.emergencyFallbackTried
+      !handleChatImplEmergencyFallbackTried
     ) {
       // Reactive provisioning: the entire combo is exhausted.
       // Trigger parallel provisioning for all providers in the background.
@@ -919,6 +955,7 @@ async function handleChatImplementation(
       }
 
       const fallbackModel = (settings as any).globalFallbackModel.trim();
+      handleChatImplEmergencyFallbackTried = true;
       // Guard against infinite recursion: if the global fallback IS the same
       // combo that just failed, retrying it would loop forever (combo fails →
       // fallback = same combo → safety-net redirect → combo fails again → …).
@@ -928,6 +965,8 @@ async function handleChatImplementation(
           "GLOBAL_FALLBACK",
           `Global fallback "${fallbackModel}" is the same as the exhausted combo "${combo.name}" — skipping to avoid recursion`
         );
+        // Mark this combo as exhausted so subsequent requests skip the pipeline
+        markComboExhausted(combo.name);
       } else {
         log.info(
           "GLOBAL_FALLBACK",
@@ -1429,26 +1468,36 @@ async function handleSingleModelChat(
               "PROVISIONER_HOOK",
               `${provider}/${model} exhausted — attempting global fallback: ${fallbackModel}`
             );
-            const fallbackResponse = await handleSingleModelChat(
-              body,
-              fallbackModel,
-              clientRawRequest,
-              request,
-              comboName,
-              apiKeyInfo,
-              telemetry,
-              { ...runtimeOptions, emergencyFallbackTried: true },
-              comboStrategy,
-              isCombo
-            );
-            if (fallbackResponse.ok) {
-              log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
-              return withSessionHeader(fallbackResponse, runtimeOptions.sessionId ?? null);
-            }
-            log.warn(
-              "GLOBAL_FALLBACK",
-              `Global fallback ${fallbackModel} also failed (${fallbackResponse.status})`
-            );
+            // Guard against infinite recursion: if the global fallback IS the same
+            // combo that just failed, retrying it would loop forever (combo fails →
+            // fallback = same combo → safety-net redirect → combo fails again → …).
+            if (comboName && fallbackModel === comboName) {
+              log.warn(
+                "GLOBAL_FALLBACK",
+                `Global fallback "${fallbackModel}" is the same as the exhausted combo "${comboName}" — skipping to avoid recursion`
+              );
+            } else {
+              const fallbackResponse = await handleSingleModelChat(
+                body,
+                fallbackModel,
+                clientRawRequest,
+                request,
+                comboName,
+                apiKeyInfo,
+                telemetry,
+                { ...runtimeOptions, emergencyFallbackTried: true },
+                comboStrategy,
+                isCombo
+              );
+              if (fallbackResponse.ok) {
+                log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
+                return withSessionHeader(fallbackResponse, runtimeOptions.sessionId ?? null);
+              }
+              log.warn(
+                "GLOBAL_FALLBACK",
+                `Global fallback ${fallbackModel} also failed (${fallbackResponse.status})`
+              );
+            } // end else (combo recursion guard)
           }
         }
 

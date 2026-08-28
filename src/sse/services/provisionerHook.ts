@@ -19,7 +19,7 @@
  *   → first key to arrive gets added, request retries with it
  */
 
-import { logger as log } from "@/shared/utils/logger";
+import * as log from "../utils/logger";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";

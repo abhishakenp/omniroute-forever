@@ -23,6 +23,7 @@ await import("tsx/esm");
 await import("../../open-sse/utils/setupPolyfill.ts");
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { bootstrapEnv } from "../build/bootstrap-env.mjs";
@@ -30,6 +31,7 @@ import { resolveRuntimePorts, withRuntimePortEnv } from "../build/runtime-env.mj
 import { ensurePeerStampToken } from "./peer-stamp.mjs";
 import { ensureNativeSqlite } from "./ensure-native-sqlite.mjs";
 import { getMainServerTimeoutConfig } from "./main-server-timeouts.mjs";
+import { resolveMaxOldSpaceMb, calibrateHeapFallbackMb } from "../build/runtime-env.mjs";
 
 // Pre-read DATA_DIR from local .env before bootstrap resolves paths
 if (!process.env.DATA_DIR) {
@@ -57,6 +59,34 @@ for (const [key, value] of Object.entries(mergedEnv)) {
 
 // Headless mode is always "production" for NODE_ENV — no dev compilation
 process.env.NODE_ENV = "production";
+
+// Cap V8 heap — without this, Node defaults to ~2GB heap ceiling on 64-bit,
+// and the headless server (640 routes + Next.js handlers + SQLite) will
+// accumulate ~350MB heapUsed and never release it. With 256MB cap, V8
+// aggressively GCs and keeps heapUsed under ~200MB.
+// OMNIROUTE_MEMORY_MB overrides (same knob as `omniroute serve`).
+// NOTE: NODE_OPTIONS only applies to child processes, not the current one.
+// For the current process, use v8.setHeapSizeLimit if available, or rely on
+// the caller setting NODE_OPTIONS before launching node.
+const heapFallback = calibrateHeapFallbackMb(os.totalmem());
+const maxOldSpaceMb = resolveMaxOldSpaceMb(
+  process.env.OMNIROUTE_MEMORY_MB,
+  Math.min(heapFallback, 256)
+);
+const existingNodeOptions = process.env.NODE_OPTIONS || "";
+if (!existingNodeOptions.includes("--max-old-space-size")) {
+  process.env.NODE_OPTIONS = `${existingNodeOptions} --max-old-space-size=${maxOldSpaceMb}`.trim();
+}
+// Try to set heap limit at runtime (Node 22+ supports v8.setHeapSizeLimit)
+try {
+  const v8 = await import("node:v8");
+  if (typeof v8.setHeapSizeLimit === "function") {
+    v8.setHeapSizeLimit(maxOldSpaceMb * 1024 * 1024);
+    console.log(`[headless] V8 heap limit set to ${maxOldSpaceMb}MB at runtime`);
+  }
+} catch {
+  // v8.setHeapSizeLimit not available — NODE_OPTIONS must be set before launch
+}
 process.env.OMNIROUTE_INTERNAL_SCHEME = "http";
 process.env.OMNIROUTE_HEADLESS = "1";
 process.env.OMNIROUTE_WS_BRIDGE_SECRET ||= randomUUID();

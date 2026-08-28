@@ -1,4 +1,4 @@
-import { getSyncedAvailableModelsByConnection } from "@/lib/db/models";
+import { getCachedSyncedAvailableModelsByConnection } from "@/lib/db/readCache";
 import { getProviderConnections } from "@/lib/db/providers";
 import { getDbInstance } from "@/lib/db/core";
 import { getAllCircuitBreakerStatuses } from "@/shared/utils/circuitBreaker";
@@ -386,11 +386,14 @@ export async function buildProviderHealthMatrix(
 
   const syncedModelsByProvider = new Map<
     string,
-    Awaited<ReturnType<typeof getSyncedAvailableModelsByConnection>>
+    Awaited<ReturnType<typeof getCachedSyncedAvailableModelsByConnection>>
   >();
   await Promise.all(
     [...providerIds].map(async (provider) => {
-      syncedModelsByProvider.set(provider, await getSyncedAvailableModelsByConnection(provider));
+      syncedModelsByProvider.set(
+        provider,
+        (await getCachedSyncedAvailableModelsByConnection(provider)) as any
+      );
     })
   );
 

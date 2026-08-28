@@ -35,7 +35,7 @@ const CONNECTION_LEVEL_ERROR_STATUSES = [408, 500, 502, 503, 504, 524];
 // whole-provider exhaustion when no connectionId is available (#8133: combo engine wastes
 // attempts on dead connections; #8137: whole-provider exhaustion wrongly skipped healthy
 // sibling connections on the same provider).
-const AUTH_LEVEL_ERROR_STATUSES = [401, 403];
+const AUTH_LEVEL_ERROR_STATUSES = [401, 403, 402]; // 402 = payment required (account has no credits — account-level, not model-level)
 
 // #5085: an "empty content" 502 is the synthetic status chatCore assigns to a provider that
 // answered HTTP 200 with no usable completion (isEmptyContentResponse). The connection is
@@ -81,9 +81,21 @@ export function applyComboTargetExhaustion(
   const provider = target.provider;
 
   // #8133/#8137: auth-level failures (401/403) mean that connection's credentials are bad.
-  // Split out to keep applyComboTargetExhaustion under the complexity ceiling.
+  // 402 (payment required) means the account has NO credits — all connections from this
+  // provider will fail the same way, so mark the entire provider as exhausted, not just
+  // the connection. Without this, a combo with 86 OpenRouter targets tries all 86
+  // individually, each doing auth checks + DB queries = sustained 80-130% CPU.
   if (AUTH_LEVEL_ERROR_STATUSES.includes(result.status) && provider && provider !== "unknown") {
-    markAuthLevelExhaustion(target, { result, sets, log, tag });
+    if (result.status === 402) {
+      // 402 = account-level exhaustion (no credits) → skip ALL remaining same-provider targets
+      sets.exhaustedProviders.add(provider);
+      log.info(
+        tag,
+        `Provider ${provider} payment required (402) — marking entire provider for skip on remaining targets`
+      );
+    } else {
+      markAuthLevelExhaustion(target, { result, sets, log, tag });
+    }
     return true;
   }
 
@@ -112,12 +124,19 @@ function isProviderQuotaExhausted(
   >
 ): boolean {
   const { rawModel, fallbackResult, structuredError, errorText, allAccountsRateLimited } = opts;
+  // allAccountsRateLimited means ALL connections for this provider are in cooldown —
+  // skip remaining same-provider targets immediately regardless of per-model quota.
+  // Without this, a combo with 86 OpenRouter targets (one per connection) tries all 86
+  // even when every account returns 402 (insufficient credits), causing 430+ iterations
+  // of auth checks + DB queries + logging = sustained 80-130% CPU.
+  if (allAccountsRateLimited && provider && provider !== "unknown") {
+    return true;
+  }
   return (
     Boolean(provider && provider !== "unknown") &&
     !hasPerModelQuota(provider as string, rawModel) &&
     (isProviderExhaustedReason(fallbackResult) ||
-      classifyErrorText(structuredError?.code || errorText) === RateLimitReason.QUOTA_EXHAUSTED ||
-      allAccountsRateLimited)
+      classifyErrorText(structuredError?.code || errorText) === RateLimitReason.QUOTA_EXHAUSTED)
   );
 }
 

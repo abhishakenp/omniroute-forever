@@ -63,9 +63,14 @@ class TTLCache<T> {
 const SETTINGS_TTL_MS = 5_000;
 const PRICING_TTL_MS = 30_000;
 const CONNECTIONS_TTL_MS = 5_000;
+const SYNCED_MODELS_TTL_MS = 10_000; // 10s — model sync runs every 24h, 10s is safe
 const settingsCache = new TTLCache<Record<string, unknown>>(SETTINGS_TTL_MS);
 const pricingCache = new TTLCache<Record<string, unknown>>(PRICING_TTL_MS);
 const connectionsCache = new TTLCache<unknown[]>(CONNECTIONS_TTL_MS, 500);
+const syncedModelsByConnectionCache = new TTLCache<Record<string, unknown[]>>(
+  SYNCED_MODELS_TTL_MS,
+  50
+);
 
 /**
  * Cached wrapper for getSettings.
@@ -185,6 +190,25 @@ interface LKGPRecordCache {
 
 const lkgpCache = new TTLCache<LKGPRecordCache | null>(SETTINGS_TTL_MS);
 
+/**
+ * Cached wrapper for getSyncedAvailableModelsByConnection.
+ * #1 CPU hot path: 86 OpenRouter connections × 426 models = 36,836
+ * JSON.parse + normalize calls per request. With 10s TTL, burst chat requests
+ * share one DB read + normalization pass instead of re-doing it per request.
+ */
+export async function getCachedSyncedAvailableModelsByConnection(
+  providerId: string
+): Promise<Record<string, unknown[]>> {
+  const cacheKey = `syncedModels:${providerId}`;
+  const cached = syncedModelsByConnectionCache.get(cacheKey);
+  if (cached) return cached;
+
+  const { getSyncedAvailableModelsByConnection } = await import("@/lib/db/models");
+  const value = await getSyncedAvailableModelsByConnection(providerId);
+  syncedModelsByConnectionCache.set(cacheKey, value);
+  return value;
+}
+
 export async function getCachedLKGP(
   comboName: string,
   modelId: string
@@ -264,7 +288,14 @@ export function getModelCatalogCacheVersion(): number {
  * cannot be selectively invalidated).
  */
 export function invalidateDbCache(
-  scope?: "settings" | "pricing" | "connections" | "combos" | "nodes" | "model-capabilities",
+  scope?:
+    | "settings"
+    | "pricing"
+    | "connections"
+    | "combos"
+    | "nodes"
+    | "model-capabilities"
+    | "synced-models",
   id?: string
 ): void {
   if (!scope || scope === "settings") settingsCache.invalidate();
@@ -280,6 +311,7 @@ export function invalidateDbCache(
   }
   if (!scope || scope === "nodes") nodesCache.invalidate();
   if (!scope || scope === "combos") combosCacheVersion++;
+  if (!scope || scope === "synced-models") syncedModelsByConnectionCache.invalidate();
   // Settings/connections/combos all feed the unified model catalog builder
   // (blockedProviders + hidePaidModels, provider connections + excludedModels,
   // combo definitions, respectively) — pricing does too, via isFreeModel().

@@ -6,6 +6,7 @@ import {
   type SyncedAvailableModel,
 } from "../models";
 import { getRawProviderConnections } from "../providers";
+import { getCachedSyncedAvailableModelsByConnection } from "../readCache";
 
 export type ActiveSyncedCatalog = {
   authoritative: boolean;
@@ -90,6 +91,28 @@ export async function getActiveSyncedCatalog(providerId: string): Promise<Active
   }
 
   try {
+    // Fast path: read the provider-level deduplicated list directly.
+    // This avoids loading 86 per-connection blobs (14MB JSON → 36K JS objects)
+    // when all connections share the same model list (the common case).
+    const providerModels = await getSyncedAvailableModels(storedProviderId);
+    if (providerModels.length > 0) {
+      // Verify at least one active connection exists for this provider
+      const connections = await getRawProviderConnections(
+        { provider: storedProviderId, isActive: true },
+        undefined,
+        undefined,
+        ["id"]
+      );
+      if (connections.length > 0) {
+        return {
+          authoritative: providerUsesAuthoritativeLiveCatalog(providerId),
+          models: providerModels,
+        };
+      }
+    }
+
+    // Slow path: no provider-level list yet (migration) — fall back to
+    // per-connection reads and deduplicate.
     const [connections, modelsByConnection] = await Promise.all([
       getRawProviderConnections(
         { provider: storedProviderId, isActive: true },
@@ -97,7 +120,7 @@ export async function getActiveSyncedCatalog(providerId: string): Promise<Active
         undefined,
         ["id", "provider"]
       ),
-      getSyncedAvailableModelsByConnection(storedProviderId),
+      getCachedSyncedAvailableModelsByConnection(storedProviderId),
     ]);
 
     const activeConnectionIds = connections
@@ -105,7 +128,10 @@ export async function getActiveSyncedCatalog(providerId: string): Promise<Active
       .filter((connection): connection is ProviderConnectionRef => connection !== null)
       .map((connection) => connection.id);
 
-    const models = collectModelsForConnections(modelsByConnection, activeConnectionIds);
+    const models = collectModelsForConnections(
+      modelsByConnection as Record<string, SyncedAvailableModel[]>,
+      activeConnectionIds
+    );
     if (models.length > 0) {
       return {
         authoritative: providerUsesAuthoritativeLiveCatalog(providerId),
@@ -159,7 +185,9 @@ export async function getAllActiveSyncedModels(): Promise<Record<string, SyncedA
 
     await Promise.all(
       Array.from(connectionIdsByProvider.entries()).map(async ([providerId, connectionIds]) => {
-        const modelsByConnection = await getSyncedAvailableModelsByConnection(providerId);
+        const modelsByConnection = (await getCachedSyncedAvailableModelsByConnection(
+          providerId
+        )) as Record<string, SyncedAvailableModel[]>;
 
         const models = collectModelsForConnections(modelsByConnection, connectionIds);
 

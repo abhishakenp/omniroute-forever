@@ -2173,7 +2173,7 @@ export async function handleComboChat({
           handleSingleModel, // raw handler — probe has its own timeout
           body as Record<string, unknown>,
           log,
-          signal,
+          signal ?? undefined,
           { minPoolSize: 20, concurrency: 40, timeoutMs: 3000, cacheTtlMs: 60_000 }
         );
         // If cache hit, probePromise resolves immediately with cached results.

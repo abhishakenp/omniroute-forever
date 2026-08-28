@@ -15,7 +15,17 @@ import {
   type ModelFamily,
 } from "@omniroute/open-sse/services/autoCombo/modelFamily.ts";
 import { getCachedSettings } from "@/lib/localDb";
+import { getModelCatalogCacheVersion } from "@/lib/db/readCache";
 import * as log from "../utils/logger";
+
+// Short-TTL cache for virtual auto-combos. The candidate pool only changes when
+// connections/models/settings change — not per-request. Without this, every
+// auto/best-free chat request rebuilds the full candidate pool (iterating all
+// connections × models + many SQLite queries for capabilities/overrides).
+// 5s TTL: balances freshness vs. CPU. invalidateDbCache() clears it immediately
+// on settings/connection/model changes via the generation counter.
+const VIRTUAL_COMBO_TTL_MS = 5000;
+const virtualComboCache = new Map<string, { value: any; expiresAt: number; generation: number }>();
 
 export type AutoRoutingState = {
   model: string;
@@ -127,6 +137,26 @@ export async function createVirtualAutoCombo(
     );
   }
 
+  // Cache key: variant + spec + apiKeyId + autoChannel
+  const cacheKey = JSON.stringify({
+    variant: state.variant,
+    spec: state.spec,
+    apiKeyId: apiKeyId ?? null,
+    autoChannel: state.model,
+  });
+  const generation = getModelCatalogCacheVersion();
+  const now = Date.now();
+  const cached = virtualComboCache.get(cacheKey);
+  if (cached && cached.expiresAt > now && cached.generation === generation) {
+    // Return a shallow clone so callers can mutate .name/.id without polluting the cache
+    const clone = Array.isArray(cached.value) ? [...cached.value] : { ...cached.value };
+    if (clone && typeof clone === "object" && !Array.isArray(clone)) {
+      clone.name = state.model;
+      clone.id = state.model;
+    }
+    return clone;
+  }
+
   try {
     const { createVirtualAutoCombo: createVirtual } =
       await import("@omniroute/open-sse/services/autoCombo/virtualFactory.ts");
@@ -136,6 +166,19 @@ export async function createVirtualAutoCombo(
     const virtualCombo = await createVirtual(state.variant, state.spec, apiKeyId, state.model);
     virtualCombo.name = state.model;
     virtualCombo.id = state.model;
+    // Cache the combo (before name/id mutation so the cache is reusable across channels)
+    const toCache = { ...virtualCombo };
+    virtualComboCache.set(cacheKey, {
+      value: toCache,
+      expiresAt: now + VIRTUAL_COMBO_TTL_MS,
+      generation,
+    });
+    // Evict expired entries (bounded map)
+    if (virtualComboCache.size > 16) {
+      for (const [k, v] of virtualComboCache) {
+        if (v.expiresAt <= now) virtualComboCache.delete(k);
+      }
+    }
     log.info(
       "AUTO",
       `Virtual auto-combo created: ${virtualCombo.name} (${virtualCombo.candidatePool?.length || 0} candidates)`

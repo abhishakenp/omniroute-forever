@@ -547,12 +547,15 @@ export async function prewarmQuotaCache(): Promise<void> {
       quotaCacheTtlMs: 300_000,
       quotaCacheMaxStaleMs: 3_600_000,
     };
-    const promises: Promise<unknown>[] = [];
+    // Build a flat list of fetch tasks (don't start them yet — previous code
+    // created all promises upfront, which meant all 90 HTTPS calls fired
+    // immediately even though only 4 were awaited at a time).
+    const tasks: Array<() => Promise<unknown>> = [];
     for (const [provider, conns] of byProvider) {
       const fetcher = getQuotaFetcher(provider)!;
       for (const conn of conns) {
         const id = conn.id as string;
-        promises.push(
+        tasks.push(() =>
           fetchResetAwareQuotaWithCache({
             provider,
             connectionId: id,
@@ -565,11 +568,11 @@ export async function prewarmQuotaCache(): Promise<void> {
         );
       }
     }
-    // Batch with bounded concurrency (4) to prevent event-loop saturation.
-    // Previous: Promise.allSettled(90 concurrent upstream fetches) → CPU 100%.
-    const PREWARM_BATCH = 4;
-    for (let i = 0; i < promises.length; i += PREWARM_BATCH) {
-      await Promise.allSettled(promises.slice(i, i + PREWARM_BATCH));
+    // Batch with bounded concurrency (3) — tasks are started lazily per batch.
+    const PREWARM_BATCH = 3;
+    for (let i = 0; i < tasks.length; i += PREWARM_BATCH) {
+      const batch = tasks.slice(i, i + PREWARM_BATCH).map((t) => t());
+      await Promise.allSettled(batch);
     }
 
     // Step 3: Persist updated cache to disk for next startup.

@@ -682,9 +682,9 @@ export async function registerNodejs(): Promise<void> {
       // Dynamic free combo generator: parallel-probes all free-tier providers
       // and updates the auto/best-free combo with working providers only.
       // Self-healing — re-probes every 5 minutes. Never fatal.
-      // WAITS for the first ModelSync cycle to complete before starting —
-      // otherwise buildFreeCandidates() self-fetches race ModelSync's 86
-      // concurrent sync requests for the HTTP server and time out.
+      // buildFreeCandidates() now uses in-process DB queries (no self-fetch)
+      // — only the probes self-fetch /v1/chat/completions. Still waits for
+      // ModelSync to complete so probe targets are populated.
       import("@omniroute/open-sse/services/autoCombo/dynamicFreeCombo")
         .then(async (m) => {
           const { getComboByName } = await import("@/lib/db/combos");
@@ -702,8 +702,8 @@ export async function registerNodejs(): Promise<void> {
               ? (settings.freeComboExcludedProviders as string[])
               : ["devin-cli"]
           );
-          // Wait for the first ModelSync cycle to finish so the HTTP server
-          // is not contended when buildFreeCandidates() self-fetches.
+          // Wait for the first ModelSync cycle so synced models are populated
+          // before the generator builds its candidate list from the DB.
           const { getFirstModelSyncPromise } = await import("@/shared/services/modelSyncScheduler");
           const firstSync = getFirstModelSyncPromise();
           if (firstSync) {

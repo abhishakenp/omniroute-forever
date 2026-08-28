@@ -1212,15 +1212,12 @@ export function getDbInstance(): SqliteDatabase {
 
   applyStoredDatabaseOptimizationSettings(db);
 
-  // Apply mmap_size from stored settings (migration 046), fallback to 256MiB
+  // mmap_size disabled — on macOS, memory-mapped SQLite pages are counted as
+  // resident RSS even when not actively accessed. The 242MB DB was mapping
+  // ~243MB into RSS. With page cache only (cache_size=16MB), SQLite reads
+  // pages on demand and releases them under memory pressure.
   try {
-    const mmapRow = db
-      .prepare("SELECT value FROM key_value WHERE namespace = ? AND key = ?")
-      .get("databaseSettings", "mmapSize") as { value: string } | undefined;
-    const mmapSize = mmapRow ? Math.max(0, parseInt(mmapRow.value, 10) || 0) : 268435456;
-    if (mmapSize > 0) {
-      db.pragma(`mmap_size = ${mmapSize}`);
-    }
+    db.pragma("mmap_size = 0");
   } catch {
     // mmap_size is best-effort; not available in all runtimes (e.g. web)
   }

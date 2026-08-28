@@ -31,7 +31,13 @@ import { isAutomatedTestProcess } from "@/shared/utils/testProcess";
 const BACKOFF_SCHEDULE = [300_000, 600_000, 1_800_000, 7_200_000]; // 5min, 10min, 30min, 2h
 const INITIAL_DELAY_MS = 30_000; // Wait for server boot
 const OAUTH_INTERVAL_MULTIPLIER = 2; // OAuth tested 2x less frequently
-const CONCURRENCY_LIMIT = 5; // Max simultaneous connection tests
+const CONCURRENCY_LIMIT = 3; // Max simultaneous connection tests (reduced from 5 → 3)
+// For providers with many connections (e.g. 86 OpenRouter), testing all of them
+// every 5 min generates 86 HTTPS calls and saturates the event loop. Cap the
+// number of connections tested per provider per sweep — the rest get tested on
+// the next sweep. This spreads the load across multiple sweeps instead of
+// batching them all into one.
+const MAX_PER_PROVIDER_PER_SWEEP = 5;
 const LOG_PREFIX = "[CredentialHealth]";
 const TRUE_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 
@@ -73,7 +79,6 @@ function getSchedulerState() {
 function isBuildProcess(): boolean {
   return typeof process !== "undefined" && process.env.NEXT_PHASE === "phase-production-build";
 }
-
 
 function isCredentialHealthCheckDisabled(): boolean {
   if (isBuildProcess() || isAutomatedTestProcess()) return true;
@@ -258,15 +263,38 @@ export async function sweep(): Promise<void> {
 
     if (dueConnections.length === 0) return;
 
+    // Cap per-provider: when a provider has many connections (e.g. 86 OpenRouter),
+    // testing all of them in one sweep generates 86 HTTPS calls and saturates the
+    // event loop. Spread them across sweeps by testing at most
+    // MAX_PER_PROVIDER_PER_SWEEP per provider per cycle. Round-robin which ones
+    // get tested so all are eventually checked.
+    const perProviderCount = new Map<string, number>();
+    const perProviderDue = new Map<string, typeof dueConnections>();
+    for (const conn of dueConnections) {
+      const arr = perProviderDue.get(conn.provider) ?? [];
+      arr.push(conn);
+      perProviderDue.set(conn.provider, arr);
+    }
+    const cappedDue: typeof dueConnections = [];
+    for (const [provider, conns] of perProviderDue) {
+      const cap = Math.min(conns.length, MAX_PER_PROVIDER_PER_SWEEP);
+      // Rotate which connections get tested this sweep so all are eventually checked
+      const offset = Math.floor(now / getSweepInterval()) % conns.length;
+      for (let i = 0; i < cap; i++) {
+        cappedDue.push(conns[(offset + i) % conns.length]);
+      }
+      perProviderCount.set(provider, cap);
+    }
+
     console.log(
       LOG_PREFIX,
-      `Testing ${dueConnections.length}/${connections.length} connections...`
+      `Testing ${cappedDue.length}/${connections.length} connections (capped per provider)...`
     );
 
     // Process with concurrency limit
-    const batches: Array<typeof dueConnections> = [];
-    for (let i = 0; i < dueConnections.length; i += CONCURRENCY_LIMIT) {
-      batches.push(dueConnections.slice(i, i + CONCURRENCY_LIMIT));
+    const batches: Array<typeof cappedDue> = [];
+    for (let i = 0; i < cappedDue.length; i += CONCURRENCY_LIMIT) {
+      batches.push(cappedDue.slice(i, i + CONCURRENCY_LIMIT));
     }
 
     for (const batch of batches) {

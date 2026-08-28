@@ -48,7 +48,8 @@
  */
 
 import { defaultLogger as log } from "@omniroute/open-sse/utils/logger";
-import { buildModelSyncInternalHeaders } from "@/shared/services/modelSyncScheduler";
+import { computeFreeModelTotals } from "@omniroute/open-sse/config/freeModelCatalog";
+import { getOriginalFetch } from "@omniroute/open-sse/utils/proxyFetch";
 
 // Lazy imports to avoid circular dependencies at module load
 async function updateComboInDb(comboId: string, models: ComboTarget[]) {
@@ -222,11 +223,12 @@ async function probeModelWithTools(
 ): Promise<ProbeResult> {
   const start = Date.now();
   try {
-    const res = await fetch(`${omniUrl}/v1/chat/completions`, {
+    const res = await getOriginalFetch()(`${omniUrl}/v1/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
+        "x-model-sync-internal-auth": "1",
       },
       body: JSON.stringify({
         model: fullModel,
@@ -299,8 +301,14 @@ const DEFAULT_PROBE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_PROBE_TIMEOUT_MS = 20000; // 20s — slower providers need more headroom
 /** Max models to probe per provider (cap to avoid explosion on providers like openrouter with 900+ models). */
 const DEFAULT_MAX_MODELS_PER_PROVIDER = 50;
-/** Max parallel probes per batch. Adaptive: actual batch = min(models_to_probe, this). */
-const DEFAULT_MAX_BATCH_SIZE = 10;
+/** Max parallel probes per batch. Adaptive: actual batch = min(models_to_probe, this).
+ * Reduced from 10 → 3 → 1 to prevent event-loop saturation from concurrent self-fetch
+ * probes to /v1/chat/completions. Each probe goes through the full chat pipeline
+ * (auth, policy, routing, upstream fetch, usage logging) with synchronous DB ops.
+ * With 10 concurrent probes, the event loop blocks for 20+ seconds, causing
+ * external health checks to timeout. At 3, CPU sustained 80-90% with inf=8 q=2.
+ * At 1, probes are serialized and CPU stays bounded. */
+const DEFAULT_MAX_BATCH_SIZE = 1;
 /** Re-verify successful models every N cycles (6 cycles = 30 min at 5-min interval). */
 const STALE_CHECK_INTERVAL = 6;
 /** Exponential backoff cap: a model that failed N times gets skipped for min(2^N - 1, 15) cycles. */
@@ -331,47 +339,53 @@ let cycleCount = 0;
 let lastCandidateKeys = new Set<string>();
 
 /**
- * Fetch free providers from OmniRoute's own /api/free-tier/summary API.
- * Returns a set of provider IDs that have at least one documented free model.
+ * Get free providers from the in-process free model catalog.
+ * Previously self-fetched /api/free-tier/summary — eliminated to avoid
+ * event-loop livelock from self-fetching in a single-threaded Node process.
  */
-async function getFreeProviders(omniUrl: string): Promise<Set<string>> {
-  const res = await fetch(`${omniUrl}/api/free-tier/summary`, {
-    headers: buildModelSyncInternalHeaders(),
-    signal: AbortSignal.timeout(10000),
-  });
-  if (!res.ok) {
-    log.warn("DYNAMIC_FREE_COMBO", `/api/free-tier/summary returned ${res.status}`);
+async function getFreeProviders(): Promise<Set<string>> {
+  try {
+    const totals = computeFreeModelTotals();
+    const providers = new Set<string>();
+    for (const pm of totals.perModel) {
+      if (pm.provider) providers.add(pm.provider);
+    }
+    return providers;
+  } catch (err) {
+    log.warn(
+      "DYNAMIC_FREE_COMBO",
+      `computeFreeModelTotals failed: ${err instanceof Error ? err.message : String(err)}`
+    );
     return new Set();
   }
-  const data = await res.json();
-  const perModel = data?.perModel ?? [];
-  const providers = new Set<string>();
-  for (const pm of perModel) {
-    if (pm.provider) providers.add(pm.provider);
-  }
-  return providers;
 }
 
 /**
- * Fetch active connections from OmniRoute's own /api/providers API.
- * Returns a set of provider IDs with at least one active connection.
+ * Get active providers from the in-process DB.
+ * Previously self-fetched /api/providers — eliminated to avoid
+ * event-loop livelock from self-fetching in a single-threaded Node process.
  */
-async function getActiveProviders(omniUrl: string): Promise<Set<string>> {
-  const res = await fetch(`${omniUrl}/api/providers`, {
-    headers: buildModelSyncInternalHeaders(),
-    signal: AbortSignal.timeout(10000),
-  });
-  if (!res.ok) {
-    log.warn("DYNAMIC_FREE_COMBO", `/api/providers returned ${res.status}`);
+async function getActiveProviders(): Promise<Set<string>> {
+  try {
+    const { getDbInstance } = await import("@/lib/db/core");
+    const db = getDbInstance();
+    const rows = db
+      .prepare("SELECT DISTINCT provider FROM provider_connections WHERE is_active = 1")
+      .all() as Array<{ provider?: unknown }>;
+    const providers = new Set<string>();
+    for (const row of rows) {
+      if (typeof row.provider === "string" && row.provider.length > 0) {
+        providers.add(row.provider);
+      }
+    }
+    return providers;
+  } catch (err) {
+    log.warn(
+      "DYNAMIC_FREE_COMBO",
+      `getActiveProviders DB query failed: ${err instanceof Error ? err.message : String(err)}`
+    );
     return new Set();
   }
-  const data = await res.json();
-  const connections = data?.connections ?? [];
-  const providers = new Set<string>();
-  for (const c of connections) {
-    if (c.isActive) providers.add(c.provider);
-  }
-  return providers;
 }
 
 interface V1Model {
@@ -382,20 +396,35 @@ interface V1Model {
 }
 
 /**
- * Fetch all models from OmniRoute's own /v1/models API.
- * Returns models with provider (owned_by), model ID (root), and tool_calling capability.
+ * Get all models from the in-process DB (synced available models).
+ * Previously self-fetched /v1/models — eliminated to avoid
+ * event-loop livelock from self-fetching in a single-threaded Node process.
  */
-async function getV1Models(omniUrl: string): Promise<V1Model[]> {
-  const res = await fetch(`${omniUrl}/v1/models`, {
-    headers: buildModelSyncInternalHeaders(),
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!res.ok) {
-    log.warn("DYNAMIC_FREE_COMBO", `/v1/models returned ${res.status}`);
+async function getV1Models(): Promise<V1Model[]> {
+  try {
+    const { getAllSyncedAvailableModels } = await import("@/lib/db/models");
+    const byProvider = await getAllSyncedAvailableModels();
+    const models: V1Model[] = [];
+    for (const [providerId, modelList] of Object.entries(byProvider)) {
+      for (const m of modelList) {
+        if (m.id) {
+          models.push({
+            id: m.id,
+            owned_by: providerId,
+            root: m.id,
+            capabilities: { tool_calling: m.supportsTools === true },
+          });
+        }
+      }
+    }
+    return models;
+  } catch (err) {
+    log.warn(
+      "DYNAMIC_FREE_COMBO",
+      `getV1Models DB query failed: ${err instanceof Error ? err.message : String(err)}`
+    );
     return [];
   }
-  const data = await res.json();
-  return (data?.data ?? data) as V1Model[];
 }
 
 /**
@@ -406,8 +435,8 @@ async function getV1Models(omniUrl: string): Promise<V1Model[]> {
  */
 async function getSyncedModelIds(providerId: string): Promise<Set<string>> {
   try {
-    const { getSyncedAvailableModelsByConnection } = await import("@/lib/db/models");
-    const byConnection = await getSyncedAvailableModelsByConnection(providerId);
+    const { getCachedSyncedAvailableModelsByConnection } = await import("@/lib/db/readCache");
+    const byConnection = await getCachedSyncedAvailableModelsByConnection(providerId);
     const ids = new Set<string>();
     for (const models of Object.values(byConnection)) {
       for (const m of models) {
@@ -421,28 +450,31 @@ async function getSyncedModelIds(providerId: string): Promise<Set<string>> {
 }
 
 /**
- * Build the candidate list using ONLY OmniRoute's own APIs:
- *   1. /api/free-tier/summary → free providers
- *   2. /api/providers → active providers
- *   3. /v1/models → all models with tool_calling=true
+ * Build the candidate list using in-process data (no self-fetch):
+ *   1. computeFreeModelTotals() → free providers (pure function)
+ *   2. provider_connections DB query → active providers
+ *   3. getAllSyncedAvailableModels() DB query → all models with tool_calling
  *   4. Intersection: free + active + tool_calling
  *
- * No hardcoded external data sources. All runtime data from OmniRoute's APIs.
+ * Self-fetch elimination: previously made 3 HTTP requests to itself
+ * (/api/free-tier/summary, /api/providers, /v1/models). In a single-threaded
+ * Node process with synchronous better-sqlite3, these self-fetches created
+ * an event-loop livelock: the server couldn't process its own requests while
+ * also serving external health checks, causing spurious "degraded/down" alerts.
  */
 export async function buildFreeCandidates(
-  omniUrl: string,
   excludedProviders: Set<string> = DEFAULT_EXCLUDED_PROVIDERS,
   maxModelsPerProvider: number = DEFAULT_MAX_MODELS_PER_PROVIDER
 ): Promise<FreeCandidate[]> {
   const [freeProviders, activeProviders, v1Models] = await Promise.all([
-    getFreeProviders(omniUrl),
-    getActiveProviders(omniUrl),
-    getV1Models(omniUrl),
+    getFreeProviders(),
+    getActiveProviders(),
+    getV1Models(),
   ]);
 
   log.info(
     "DYNAMIC_FREE_COMBO",
-    `API data: ${freeProviders.size} free providers, ${activeProviders.size} active, ${v1Models.length} models in /v1/models`
+    `In-process data: ${freeProviders.size} free providers, ${activeProviders.size} active, ${v1Models.length} synced models`
   );
 
   // Intersection: free + active, minus excluded
@@ -737,7 +769,7 @@ export async function generateDynamicFreeCombo(
     await ensureProbeStateLoaded();
     cycleCount++;
 
-    const candidates = await buildFreeCandidates(omniUrl, excludedProviders);
+    const candidates = await buildFreeCandidates(excludedProviders);
 
     // Adaptive: select only candidates that NEED probing this cycle
     const toProbe = selectCandidatesToProbe(candidates);
