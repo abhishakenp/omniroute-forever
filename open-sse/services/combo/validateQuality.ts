@@ -327,9 +327,9 @@ export async function validateResponseQuality(
     function isTerminalUsageOnlyChunk(parsed: Record<string, unknown>, eventType: string): boolean {
       return Boolean(
         parsed.usage &&
-          typeof parsed.usage === "object" &&
-          !Array.isArray(parsed.choices) &&
-          !eventType.startsWith("response.")
+        typeof parsed.usage === "object" &&
+        !Array.isArray(parsed.choices) &&
+        !eventType.startsWith("response.")
       );
     }
 
@@ -728,6 +728,25 @@ export async function validateResponseQuality(
           reason: `reasoning consumed ${reasoningTokens}/${completionTokens} tokens — no content output`,
         };
       }
+    }
+  }
+
+  // Provider-specific content inspection: some providers (auggie/augmentcode)
+  // return HTTP 200 with the error message inside choices[].message.content
+  // instead of a proper error envelope. The generic exhaustion marker check
+  // above only inspects the error envelope, not assistant content — by design,
+  // to avoid misclassifying prose that mentions "credits". But auggie's
+  // "⚠️ You have run out of credits" IS a real upstream failure, not prose.
+  // Check only when the content matches the exhaustion pattern AND the response
+  // model/provider is known to mask errors this way.
+  if (hasContent && typeof content === "string") {
+    const responseModel = typeof json.model === "string" ? json.model : "";
+    const responseId = typeof json.id === "string" ? json.id : "";
+    // auggie responses have id like "chatcmpl-auggie-..." and model "sonnet4.6"
+    const isAuggieResponse = responseId.includes("auggie") || responseModel === "sonnet4.6";
+    if (isAuggieResponse && EXHAUSTION_MARKER_PATTERN.test(content)) {
+      const snippet = content.length > 80 ? `${content.slice(0, 80)}…` : content;
+      return { valid: false, reason: `provider masked exhaustion in content: ${snippet}` };
     }
   }
 
