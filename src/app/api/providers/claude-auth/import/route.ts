@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { ClaudeAuthFileError } from "@/lib/oauth/utils/claudeAuthFile";
 import {
@@ -35,12 +34,12 @@ export async function POST(request: Request) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   const parsedBody = validateBody(importClaudeAuthSchema, body);
   if (isValidationFailure(parsedBody)) {
-    return NextResponse.json({ error: parsedBody.error }, { status: 400 });
+    return Response.json({ error: parsedBody.error }, { status: 400 });
   }
 
   const { source, name, email, overwriteExisting } = parsedBody.data;
@@ -49,7 +48,7 @@ export async function POST(request: Request) {
   try {
     rawJson = source.kind === "json" ? source.json : JSON.parse(source.text);
   } catch {
-    return NextResponse.json(
+    return Response.json(
       { error: "Could not parse the content as JSON", code: "invalid_json" },
       { status: 400 }
     );
@@ -80,18 +79,18 @@ export async function POST(request: Request) {
       },
     });
 
-    return NextResponse.json({
+    return Response.json({
       connection: sanitizeConnectionForResponse(connection as Record<string, unknown>),
       created,
     });
   } catch (error) {
     if (error instanceof ClaudeAuthFileError) {
-      return NextResponse.json(
+      return Response.json(
         { error: error.message, code: error.code },
         { status: error.status }
       );
     }
-    return NextResponse.json(
+    return Response.json(
       { error: sanitizeErrorMessage(error) || "Failed to import Claude auth" },
       { status: 500 }
     );

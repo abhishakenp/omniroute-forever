@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import pino from "pino";
 import { z } from "zod";
 
@@ -31,7 +30,7 @@ export async function GET(request: Request) {
     });
 
     if (!parsedQuery.success) {
-      return NextResponse.json(buildErrorBody(400, "Invalid provider health matrix query"), {
+      return Response.json(buildErrorBody(400, "Invalid provider health matrix query"), {
         status: 400,
       });
     }
@@ -41,10 +40,10 @@ export async function GET(request: Request) {
       range: parsedQuery.data.range,
       includeHealthy: parsedQuery.data.includeHealthy,
     });
-    return NextResponse.json(report);
+    return Response.json(report);
   } catch (error) {
     logger.error({ err: error }, "Failed to build provider health matrix");
-    return NextResponse.json(buildErrorBody(500, "Failed to build provider health matrix"), {
+    return Response.json(buildErrorBody(500, "Failed to build provider health matrix"), {
       status: 500,
     });
   }

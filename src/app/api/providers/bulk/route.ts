@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { getAuditRequestContext, logAuditEvent } from "@/lib/compliance/index";
 import {
   getProviderAuditTarget,
@@ -45,12 +44,12 @@ export async function POST(request: Request) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   const validation = validateBody(bulkCreateProviderSchema, body);
   if (isValidationFailure(validation)) {
-    return NextResponse.json({ error: validation.error }, { status: 400 });
+    return Response.json({ error: validation.error }, { status: 400 });
   }
 
   const {
@@ -68,11 +67,11 @@ export async function POST(request: Request) {
     isAnthropicCompatibleProvider(provider);
 
   if (!isManagedOrCompatible) {
-    return NextResponse.json({ error: "Invalid provider" }, { status: 400 });
+    return Response.json({ error: "Invalid provider" }, { status: 400 });
   }
 
   if (!supportsBulkApiKey(provider)) {
-    return NextResponse.json(
+    return Response.json(
       { error: "Bulk add is not supported for this provider" },
       { status: 400 }
     );
@@ -82,7 +81,7 @@ export async function POST(request: Request) {
   if (isOpenAICompatibleProvider(provider) || isAnthropicCompatibleProvider(provider)) {
     const node: any = await getProviderNodeById(provider);
     if (!node) {
-      return NextResponse.json({ error: "Provider node not found" }, { status: 404 });
+      return Response.json({ error: "Provider node not found" }, { status: 404 });
     }
     baseProviderSpecificData = {
       ...(baseProviderSpecificData || {}),
@@ -213,7 +212,7 @@ export async function POST(request: Request) {
     },
   });
 
-  return NextResponse.json(
+  return Response.json(
     {
       success: created.length,
       failed: errors.length,

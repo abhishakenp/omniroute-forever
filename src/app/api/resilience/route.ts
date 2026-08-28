@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { getCachedSettings, getSettings, updateSettings } from "@/lib/localDb";
 import {
   buildLegacyResilienceCompat,
@@ -130,7 +129,7 @@ export async function GET() {
     const settings = await getCachedSettings();
     const resilience = resolveResilienceSettings(settings);
 
-    return NextResponse.json({
+    return Response.json({
       requestQueue: resilience.requestQueue,
       connectionCooldown: resilience.connectionCooldown,
       providerBreaker: resilience.providerBreaker,
@@ -147,7 +146,7 @@ export async function GET() {
     });
   } catch (err: unknown) {
     console.error("[API] GET /api/resilience error:", err);
-    return NextResponse.json(
+    return Response.json(
       { error: getErrorMessage(err, "Failed to load resilience settings") },
       { status: 500 }
     );
@@ -162,7 +161,7 @@ export async function PATCH(request) {
   try {
     rawBody = await request.json();
   } catch {
-    return NextResponse.json(
+    return Response.json(
       {
         error: {
           message: "Invalid request",
@@ -176,7 +175,7 @@ export async function PATCH(request) {
   try {
     const validation = validateBody(updateResilienceSchema, rawBody);
     if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return Response.json({ error: validation.error }, { status: 400 });
     }
 
     const body = validation.data as JsonRecord;
@@ -245,7 +244,7 @@ export async function PATCH(request) {
       resetAllCircuitBreakers();
     }
 
-    return NextResponse.json({
+    return Response.json({
       ok: true,
       requestQueue: nextResilience.requestQueue,
       connectionCooldown: nextResilience.connectionCooldown,
@@ -263,7 +262,7 @@ export async function PATCH(request) {
     });
   } catch (err: unknown) {
     console.error("[API] PATCH /api/resilience error:", err);
-    return NextResponse.json(
+    return Response.json(
       { error: getErrorMessage(err, "Failed to save resilience settings") },
       { status: 500 }
     );

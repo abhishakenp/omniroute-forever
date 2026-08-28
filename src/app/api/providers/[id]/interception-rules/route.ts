@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import {
   getInterceptionRules,
   setInterceptionRules,
@@ -21,9 +20,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   try {
     const { id } = await params;
     const config = getInterceptionRules(id);
-    return NextResponse.json(config ?? { interceptSearch: undefined, interceptFetch: undefined });
+    return Response.json(config ?? { interceptSearch: undefined, interceptFetch: undefined });
   } catch (error) {
-    return NextResponse.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
+    return Response.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
   }
 }
 
@@ -40,20 +39,20 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   try {
     rawBody = await request.json();
   } catch {
-    return NextResponse.json(buildErrorBody(400, "Invalid JSON body"), { status: 400 });
+    return Response.json(buildErrorBody(400, "Invalid JSON body"), { status: 400 });
   }
 
   try {
     const { id } = await params;
     const validation = validateBody(updateInterceptionRulesSchema, rawBody);
     if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return Response.json({ error: validation.error }, { status: 400 });
     }
 
     setInterceptionRules(id, validation.data);
-    return NextResponse.json({ success: true });
+    return Response.json({ success: true });
   } catch (error) {
-    return NextResponse.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
+    return Response.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
   }
 }
 
@@ -68,8 +67,8 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   try {
     const { id } = await params;
     deleteInterceptionRules(id);
-    return NextResponse.json({ success: true });
+    return Response.json({ success: true });
   } catch (error) {
-    return NextResponse.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
+    return Response.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
   }
 }

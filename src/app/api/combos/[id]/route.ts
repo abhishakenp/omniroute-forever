@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import {
   getComboById,
   updateCombo,
@@ -91,7 +90,7 @@ export async function GET(request, { params }) {
       return comboErrorResponse("COMBO_007", 404, { id }, request);
     }
 
-    return NextResponse.json(combo);
+    return Response.json(combo);
   } catch (error) {
     console.log("Error fetching combo:", error);
     return comboErrorResponse("INTERNAL_001", 500, undefined, request);
@@ -256,7 +255,7 @@ export async function PUT(request, { params }) {
     const warning = comboName
       ? buildComboNameCollisionWarning(String(comboName))
       : null;
-    return NextResponse.json(warning ? { ...combo, warning } : combo);
+    return Response.json(warning ? { ...combo, warning } : combo);
   } catch (error) {
     if (error instanceof ComboInvariantError) {
       return comboErrorResponse("COMBO_008", 400, { reason: error.message }, request);
@@ -294,7 +293,7 @@ export async function DELETE(request, { params }) {
     // Auto sync to Cloud if enabled
     await syncToCloudIfEnabled();
 
-    return NextResponse.json({ success: true });
+    return Response.json({ success: true });
   } catch (error) {
     console.log("Error deleting combo:", error);
     return comboErrorResponse("INTERNAL_001", 500, undefined, request);

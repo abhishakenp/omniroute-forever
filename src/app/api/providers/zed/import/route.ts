@@ -23,7 +23,6 @@
  * Security: protected by requireManagementAuth.
  */
 
-import { NextResponse } from "next/server";
 import { discoverZedCredentials, isZedInstalled } from "@/lib/zed-oauth/keychain-reader";
 import { partitionZedCredentials } from "@/lib/zed-oauth/importUtils";
 import {
@@ -66,7 +65,7 @@ export async function POST(request: Request): Promise<NextResponse<ImportRespons
   const confirmed = parseConfirmedAccounts(body);
 
   if (!LEGACY_ONE_STEP_ENABLED && confirmed === null) {
-    return NextResponse.json(
+    return Response.json(
       {
         success: false,
         error:
@@ -80,7 +79,7 @@ export async function POST(request: Request): Promise<NextResponse<ImportRespons
 
   try {
     if (isRunningInDocker()) {
-      return NextResponse.json(
+      return Response.json(
         {
           success: false,
           error:
@@ -95,7 +94,7 @@ export async function POST(request: Request): Promise<NextResponse<ImportRespons
 
     const zedInstalled = await isZedInstalled();
     if (!zedInstalled) {
-      return NextResponse.json(
+      return Response.json(
         {
           success: false,
           error: "Zed IDE does not appear to be installed on this system.",
@@ -132,7 +131,7 @@ export async function POST(request: Request): Promise<NextResponse<ImportRespons
           allCredentials.length
         );
       }
-      return NextResponse.json({
+      return Response.json({
         success: true,
         count: 0,
         providers: [],
@@ -183,7 +182,7 @@ export async function POST(request: Request): Promise<NextResponse<ImportRespons
       uniqueProviders.length
     );
 
-    return NextResponse.json({
+    return Response.json({
       success: true,
       count: savedCount,
       providers: uniqueProviders,
@@ -194,7 +193,7 @@ export async function POST(request: Request): Promise<NextResponse<ImportRespons
     console.error("[Zed Import] Error importing credentials:", error);
 
     if (error?.message?.includes("User canceled") || error?.message?.includes("denied")) {
-      return NextResponse.json(
+      return Response.json(
         {
           success: false,
           error: "Keychain access denied. Please grant permission when prompted by your OS.",
@@ -204,7 +203,7 @@ export async function POST(request: Request): Promise<NextResponse<ImportRespons
     }
 
     if (error?.message?.includes("not found") || error?.message?.includes("ENOENT")) {
-      return NextResponse.json(
+      return Response.json(
         {
           success: false,
           error:
@@ -214,7 +213,7 @@ export async function POST(request: Request): Promise<NextResponse<ImportRespons
       );
     }
 
-    return NextResponse.json(
+    return Response.json(
       {
         success: false,
         error: "Failed to import credentials",

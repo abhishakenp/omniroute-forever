@@ -6,7 +6,6 @@
  * and persists extracted credentials to the provider connection.
  */
 
-import { NextRequest, NextResponse } from "next/server";
 import { getCachedProviderConnectionById, updateProviderConnection } from "@/lib/localDb";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
@@ -93,7 +92,7 @@ function adobeFireflySuccessResponse(data: {
   arpSessionId?: string;
   via: "pure-cdp";
 }): NextResponse {
-  return NextResponse.json({
+  return Response.json({
     success: true,
     account: data.account || undefined,
     accessToken: data.accessToken || undefined,
@@ -142,7 +141,7 @@ async function loginAdobeFirefly(
         via: "pure-cdp",
       });
     }
-    return NextResponse.json(
+    return Response.json(
       {
         success: false,
         error: pure.error || "Adobe Firefly sign-in did not capture an authenticated IMS JWT.",
@@ -151,14 +150,14 @@ async function loginAdobeFirefly(
     );
   } catch (err) {
     const msg = sanitizeErrorMessage(err instanceof Error ? err.message : err);
-    return NextResponse.json({ success: false, error: msg }, { status: 400 });
+    return Response.json({ success: false, error: msg }, { status: 400 });
   }
 }
 
 // --- POST: Start login flow -------------------------------------------------
 
 export async function POST(
-  req: NextRequest,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
   const auth = await requireManagementAuth(req);
@@ -167,7 +166,7 @@ export async function POST(
   const { id } = await params;
   const provider = await getCachedProviderConnectionById(id);
   if (!provider) {
-    return NextResponse.json({ success: false, error: "Provider not found" }, { status: 404 });
+    return Response.json({ success: false, error: "Provider not found" }, { status: 404 });
   }
 
   const body = (await req.json().catch(() => ({}))) as {
@@ -182,7 +181,7 @@ export async function POST(
       return await loginAdobeFirefly(id, body);
     } catch (err) {
       const msg = sanitizeErrorMessage(err instanceof Error ? err.message : err);
-      return NextResponse.json(
+      return Response.json(
         { success: false, error: `Adobe Firefly sign-in error: ${msg}` },
         { status: 500 }
       );
@@ -209,7 +208,7 @@ export async function POST(
           providerSpecificData: result.credentials,
         });
 
-        return NextResponse.json({
+        return Response.json({
           success: true,
           credentials: result.credentials,
           persisted: true,
@@ -217,20 +216,20 @@ export async function POST(
       } catch (err) {
         // Hard Rule #12: never put raw err.message/stack in a response body.
         const msg = sanitizeErrorMessage(err instanceof Error ? err.message : err);
-        return NextResponse.json(
+        return Response.json(
           { success: false, error: `Extracted but failed to persist: ${msg}` },
           { status: 500 }
         );
       }
     }
 
-    return NextResponse.json(result, {
+    return Response.json(result, {
       status: result.success ? 200 : 400,
     });
   } catch (err) {
     // Hard Rule #12: never put raw err.message/stack in a response body.
     const msg = sanitizeErrorMessage(err instanceof Error ? err.message : err);
-    return NextResponse.json(
+    return Response.json(
       { success: false, error: `Login endpoint error: ${msg}` },
       { status: 500 }
     );

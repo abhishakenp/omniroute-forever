@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getApiKeyById } from "@/lib/db/apiKeys";
 import { getApiKeyUsageLimitStatus } from "@/lib/usage/apiKeyUsageLimits";
@@ -12,7 +11,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const { id } = await params;
     const key = await getApiKeyById(id);
     if (!key || typeof key.id !== "string") {
-      return NextResponse.json({ error: "Key not found" }, { status: 404 });
+      return Response.json({ error: "Key not found" }, { status: 404 });
     }
 
     const status = await getApiKeyUsageLimitStatus({
@@ -25,7 +24,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
         typeof key.weeklyUsageLimitUsd === "number" ? key.weeklyUsageLimitUsd : null,
     });
 
-    return NextResponse.json({
+    return Response.json({
       key: {
         id: key.id,
         name: typeof key.name === "string" ? key.name : "",
@@ -39,6 +38,6 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     });
   } catch (error) {
     log.error("keys", "Error fetching API key usage limits", error);
-    return NextResponse.json({ error: "Failed to fetch usage limits" }, { status: 500 });
+    return Response.json({ error: "Failed to fetch usage limits" }, { status: 500 });
   }
 }

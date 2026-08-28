@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { NextResponse } from "next/server";
 import { buildComboTestRequestBody, extractComboTestResponseText } from "@/lib/combos/testHealth";
 import { getComboByName, getCombos, pickApiKeyForInternalUse } from "@/lib/localDb";
 import { getRuntimePorts } from "@/lib/runtime/ports";
@@ -135,7 +134,7 @@ export async function POST(request) {
   try {
     rawBody = await request.json();
   } catch {
-    return NextResponse.json(
+    return Response.json(
       {
         error: {
           message: "Invalid request",
@@ -149,20 +148,20 @@ export async function POST(request) {
   try {
     const validation = validateBody(testComboSchema, rawBody);
     if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return Response.json({ error: validation.error }, { status: 400 });
     }
     const { comboName } = validation.data;
 
     const combo = await getComboByName(comboName);
     if (!combo) {
-      return NextResponse.json({ error: "Combo not found" }, { status: 404 });
+      return Response.json({ error: "Combo not found" }, { status: 404 });
     }
 
     const allCombos = await getCombos();
     const targets = resolveNestedComboTargets(combo, allCombos);
 
     if (targets.length === 0) {
-      return NextResponse.json({ error: "Combo has no models" }, { status: 400 });
+      return Response.json({ error: "Combo has no models" }, { status: 400 });
     }
 
     const baseInternalUrl = getInternalBaseUrl();
@@ -173,7 +172,7 @@ export async function POST(request) {
     const resolvedResult = results.find((result) => result.status === "ok") || null;
     const resolvedBy = resolvedResult?.model || null;
 
-    return NextResponse.json({
+    return Response.json({
       comboName,
       strategy: combo.strategy || "priority",
       resolvedBy,
@@ -193,7 +192,7 @@ export async function POST(request) {
     });
   } catch (error) {
     console.log("Error testing combo:", error);
-    return NextResponse.json({ error: "Failed to test combo" }, { status: 500 });
+    return Response.json({ error: "Failed to test combo" }, { status: 500 });
   }
 }
 

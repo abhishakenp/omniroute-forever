@@ -1,6 +1,5 @@
 import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { getFile, deleteFile, formatFileResponse } from "@/lib/localDb";
-import { NextResponse } from "next/server";
 import { getApiKeyRequestScope } from "@/app/api/v1/_helpers/apiKeyScope";
 
 export async function OPTIONS() {
@@ -16,13 +15,13 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const file = getFile(id);
 
   if (!file || (file.apiKeyId !== null && file.apiKeyId !== apiKeyId && !scope.isSessionAuth)) {
-    return NextResponse.json(
+    return Response.json(
       { error: { message: "File not found", type: "invalid_request_error" } },
       { status: 404, headers: CORS_HEADERS }
     );
   }
 
-  return NextResponse.json(formatFileResponse(file), { headers: CORS_HEADERS });
+  return Response.json(formatFileResponse(file), { headers: CORS_HEADERS });
 }
 
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -34,7 +33,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   const file = getFile(id);
 
   if (!file) {
-    return NextResponse.json(
+    return Response.json(
       { error: { message: "File not found", type: "invalid_request_error" } },
       { status: 404, headers: CORS_HEADERS }
     );
@@ -43,7 +42,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   // Allow session-authenticated (dashboard) requests to delete any file;
   // for API-key-authenticated requests, enforce scope.
   if (!scope.isSessionAuth && file.apiKeyId !== null && file.apiKeyId !== apiKeyId) {
-    return NextResponse.json(
+    return Response.json(
       { error: { message: "File not found", type: "invalid_request_error" } },
       { status: 404, headers: CORS_HEADERS }
     );
@@ -51,7 +50,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
 
   deleteFile(id);
 
-  return NextResponse.json(
+  return Response.json(
     {
       id,
       object: "file",

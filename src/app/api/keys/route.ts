@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import {
   getApiKeys,
   getApiKeysCount,
@@ -45,14 +44,14 @@ export async function GET(request: Request) {
       key: maskStoredApiKey(k.key),
     }));
 
-    return NextResponse.json({
+    return Response.json({
       keys: maskedKeys,
       total,
       allowKeyReveal: isApiKeyRevealEnabled(),
     });
   } catch (error) {
     log.error("keys", "Error fetching keys", error);
-    return NextResponse.json({ error: "Failed to fetch keys" }, { status: 500 });
+    return Response.json({ error: "Failed to fetch keys" }, { status: 500 });
   }
 }
 
@@ -67,7 +66,7 @@ export async function POST(request) {
     // Zod validation
     const validation = validateBody(createKeySchema, body);
     if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return Response.json({ error: validation.error }, { status: 400 });
     }
     const {
       name,
@@ -112,7 +111,7 @@ export async function POST(request) {
     // this is safe to leave unawaited.
     void syncKeysToCloudIfEnabled();
 
-    return NextResponse.json(
+    return Response.json(
       {
         key: apiKey.key,
         name: apiKey.name,
@@ -130,7 +129,7 @@ export async function POST(request) {
     );
   } catch (error) {
     log.error("keys", "Error creating key", error);
-    return NextResponse.json({ error: "Failed to create key" }, { status: 500 });
+    return Response.json({ error: "Failed to create key" }, { status: 500 });
   }
 }
 

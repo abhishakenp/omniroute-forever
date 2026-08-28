@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import {
   getParamFilterConfig,
   setParamFilterConfig,
@@ -20,9 +19,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   try {
     const { id } = await params;
     const config = getParamFilterConfig(id);
-    return NextResponse.json(config ?? { block: [], allow: [], autoLearn: false });
+    return Response.json(config ?? { block: [], allow: [], autoLearn: false });
   } catch (error) {
-    return NextResponse.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
+    return Response.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
   }
 }
 
@@ -39,14 +38,14 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   try {
     rawBody = await request.json();
   } catch {
-    return NextResponse.json(buildErrorBody(400, "Invalid JSON body"), { status: 400 });
+    return Response.json(buildErrorBody(400, "Invalid JSON body"), { status: 400 });
   }
 
   try {
     const { id } = await params;
     const validation = validateBody(updateParamFilterConfigSchema, rawBody);
     if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return Response.json({ error: validation.error }, { status: 400 });
     }
     const { block, allow, models, autoLearn } = validation.data;
 
@@ -56,9 +55,9 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       models,
       autoLearn: autoLearn ?? false,
     });
-    return NextResponse.json({ success: true });
+    return Response.json({ success: true });
   } catch (error) {
-    return NextResponse.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
+    return Response.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
   }
 }
 
@@ -73,8 +72,8 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   try {
     const { id } = await params;
     deleteParamFilterConfig(id);
-    return NextResponse.json({ success: true });
+    return Response.json({ success: true });
   } catch (error) {
-    return NextResponse.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
+    return Response.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
   }
 }

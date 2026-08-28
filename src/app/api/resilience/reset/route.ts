@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 
 /**
@@ -28,13 +27,13 @@ export async function POST(request: Request) {
       await import("@omniroute/open-sse/services/accountFallback.ts");
     clearAllModelLockouts();
 
-    return NextResponse.json({
+    return Response.json({
       ok: true,
       resetCount,
       message: `Reset ${resetCount} circuit breaker(s) and model lockouts`,
     });
   } catch (err: unknown) {
     console.error("[API] POST /api/resilience/reset error:", err);
-    return NextResponse.json({ error: "Failed to reset resilience state" }, { status: 500 });
+    return Response.json({ error: "Failed to reset resilience state" }, { status: 500 });
   }
 }

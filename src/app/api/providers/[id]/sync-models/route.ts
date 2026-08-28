@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { getCachedProviderConnectionById } from "@/lib/localDb";
 import { getSyncedAvailableModelsForConnection } from "@/lib/db/models";
 import { selectModelsForImport } from "@/shared/utils/freeModels";
@@ -380,7 +379,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
   try {
     if (!(await isAuthenticated(request)) && !isModelSyncInternalRequest(request)) {
-      return NextResponse.json(
+      return Response.json(
         { error: { message: "Authentication required", type: "invalid_api_key" } },
         { status: 401 }
       );
@@ -388,13 +387,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     const connection = await getCachedProviderConnectionById(id);
     if (!connection) {
-      return NextResponse.json({ error: "Connection not found" }, { status: 404 });
+      return Response.json({ error: "Connection not found" }, { status: 404 });
     }
 
     logProvider = toNonEmptyString(connection.provider) || "unknown";
     channelLabel = getModelSyncChannelLabel(connection);
     if (providerUsesCuratedModelsOnly(logProvider)) {
-      return NextResponse.json({
+      return Response.json({
         provider: logProvider,
         connectionId: id,
         source: "curated",
@@ -441,7 +440,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           : {}),
       });
 
-      return NextResponse.json(
+      return Response.json(
         {
           error: responseError,
           ...(parseError ? { upstreamStatus: modelsRes.status } : {}),
@@ -474,7 +473,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         },
       });
 
-      return NextResponse.json(
+      return Response.json(
         {
           error: responseError,
           source: modelSource,
@@ -604,7 +603,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       });
     }
 
-    return NextResponse.json({
+    return Response.json({
       ok: true,
       provider: logProvider,
       mode,
@@ -644,7 +643,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         : {}),
     }).catch(() => {});
 
-    return NextResponse.json(
+    return Response.json(
       { error: sanitizeErrorMessage(error) || "Failed to sync models" },
       { status: 500 }
     );

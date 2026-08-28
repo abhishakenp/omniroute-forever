@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { pingDb } from "@/lib/db/core";
 
 /**
@@ -20,12 +19,12 @@ export async function GET() {
   try {
     const alive = pingDb();
     if (!alive) {
-      return NextResponse.json(
+      return Response.json(
         { status: "error", error: "db_query_failed" },
         { status: 503 }
       );
     }
-    return NextResponse.json(
+    return Response.json(
       {
         status: "ok",
         timestamp: new Date().toISOString(),
@@ -40,7 +39,7 @@ export async function GET() {
     );
   } catch (error) {
     console.error("[ping] Unexpected error in GET /api/health/ping:", error);
-    return NextResponse.json(
+    return Response.json(
       { status: "error", error: "ping_failed" },
       { status: 503 }
     );

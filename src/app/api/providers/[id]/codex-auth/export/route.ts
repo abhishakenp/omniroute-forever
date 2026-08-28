@@ -1,11 +1,10 @@
-import { NextResponse } from "next/server";
 import { buildCodexAuthFile, CodexAuthFileError } from "@/lib/oauth/utils/codexAuthFile";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 
 function toErrorResponse(error: unknown) {
   if (error instanceof CodexAuthFileError) {
-    return NextResponse.json(
+    return Response.json(
       {
         error: error.message,
         code: error.code,
@@ -15,7 +14,7 @@ function toErrorResponse(error: unknown) {
   }
 
   const message = sanitizeErrorMessage(error) || "Failed to export Codex auth file";
-  return NextResponse.json({ error: message }, { status: 500 });
+  return Response.json({ error: message }, { status: 500 });
 }
 
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {

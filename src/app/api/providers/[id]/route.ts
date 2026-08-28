@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { getAuditRequestContext, logAuditEvent } from "@/lib/compliance/index";
 import {
   getProviderAuditTarget,
@@ -64,7 +63,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const connection = await getCachedProviderConnectionById(id);
 
     if (!connection) {
-      return NextResponse.json({ error: "Connection not found" }, { status: 404 });
+      return Response.json({ error: "Connection not found" }, { status: 404 });
     }
 
     const revealKeys = isApiKeyRevealEnabled();
@@ -83,10 +82,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       );
     }
 
-    return NextResponse.json({ connection: result });
+    return Response.json({ connection: result });
   } catch (error) {
     console.log("Error fetching connection:", error);
-    return NextResponse.json({ error: "Failed to fetch connection" }, { status: 500 });
+    return Response.json({ error: "Failed to fetch connection" }, { status: 500 });
   }
 }
 
@@ -100,7 +99,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   try {
     rawBody = await request.json();
   } catch {
-    return NextResponse.json(
+    return Response.json(
       {
         error: {
           message: "Invalid request",
@@ -115,7 +114,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     const { id } = await params;
     const validation = validateBody(updateProviderConnectionSchema, rawBody);
     if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return Response.json({ error: validation.error }, { status: 400 });
     }
     const body = validation.data;
     const {
@@ -147,7 +146,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
 
     const existing = (await getCachedProviderConnectionById(id)) as Record<string, any> | null;
     if (!existing) {
-      return NextResponse.json({ error: "Connection not found" }, { status: 404 });
+      return Response.json({ error: "Connection not found" }, { status: 404 });
     }
 
     const updateData: Record<string, any> = {};
@@ -330,10 +329,10 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       },
     });
 
-    return NextResponse.json({ connection: result });
+    return Response.json({ connection: result });
   } catch (error) {
     console.log("Error updating connection:", error);
-    return NextResponse.json({ error: "Failed to update connection" }, { status: 500 });
+    return Response.json({ error: "Failed to update connection" }, { status: 500 });
   }
 }
 
@@ -350,12 +349,12 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     // Fetch connection before deleting to check provider type
     const connection = (await getCachedProviderConnectionById(id)) as Record<string, any> | null;
     if (!connection) {
-      return NextResponse.json({ error: "Connection not found" }, { status: 404 });
+      return Response.json({ error: "Connection not found" }, { status: 404 });
     }
 
     const deleted = await deleteProviderConnection(id);
     if (!deleted) {
-      return NextResponse.json({ error: "Connection not found" }, { status: 404 });
+      return Response.json({ error: "Connection not found" }, { status: 404 });
     }
 
     // Remove this connection's synced models. Provider-level imported models
@@ -383,10 +382,10 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
       },
     });
 
-    return NextResponse.json({ message: "Connection deleted successfully" });
+    return Response.json({ message: "Connection deleted successfully" });
   } catch (error) {
     console.log("Error deleting connection:", error);
-    return NextResponse.json({ error: "Failed to delete connection" }, { status: 500 });
+    return Response.json({ error: "Failed to delete connection" }, { status: 500 });
   }
 }
 

@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { getAuditRequestContext, logAuditEvent } from "@/lib/compliance/index";
 import {
   getProviderAuditTarget,
@@ -74,10 +73,10 @@ export async function GET(request: Request) {
         : undefined,
     }));
 
-    return NextResponse.json({ connections: safeConnections, total });
+    return Response.json({ connections: safeConnections, total });
   } catch (error) {
     console.log("Error fetching providers:", error);
-    return NextResponse.json({ error: "Failed to fetch providers" }, { status: 500 });
+    return Response.json({ error: "Failed to fetch providers" }, { status: 500 });
   }
 }
 
@@ -94,7 +93,7 @@ export async function POST(request: Request) {
     // Zod validation
     const validation = validateBody(createProviderSchema, body);
     if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return Response.json({ error: validation.error }, { status: 400 });
     }
     const {
       provider,
@@ -114,7 +113,7 @@ export async function POST(request: Request) {
       isAnthropicCompatibleProvider(provider);
 
     if (!isValidProvider) {
-      return NextResponse.json({ error: "Invalid provider" }, { status: 400 });
+      return Response.json({ error: "Invalid provider" }, { status: 400 });
     }
 
     let providerSpecificData = incomingPsd || null;
@@ -128,7 +127,7 @@ export async function POST(request: Request) {
     if (isOpenAICompatibleProvider(provider)) {
       const node: any = await resolveProviderNodeForConnection(provider);
       if (!node) {
-        return NextResponse.json({ error: "OpenAI Compatible node not found" }, { status: 404 });
+        return Response.json({ error: "OpenAI Compatible node not found" }, { status: 404 });
       }
 
       const existingConnections = await getProviderConnections({ provider });
@@ -147,7 +146,7 @@ export async function POST(request: Request) {
     } else if (isAnthropicCompatibleProvider(provider)) {
       const node: any = await resolveProviderNodeForConnection(provider);
       if (!node) {
-        return NextResponse.json(
+        return Response.json(
           {
             error: isClaudeCodeCompatibleProvider(provider)
               ? "CC Compatible node not found"
@@ -275,10 +274,10 @@ export async function POST(request: Request) {
       );
     }
 
-    return NextResponse.json({ connection: result }, { status: 201 });
+    return Response.json({ connection: result }, { status: 201 });
   } catch (error) {
     console.log("Error creating provider:", error);
-    return NextResponse.json({ error: "Failed to create provider" }, { status: 500 });
+    return Response.json({ error: "Failed to create provider" }, { status: 500 });
   }
 }
 
@@ -293,12 +292,12 @@ export async function PATCH(request: Request) {
   try {
     rawBody = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   const validation = validateBody(batchUpdateProviderConnectionsSchema, rawBody);
   if (isValidationFailure(validation)) {
-    return NextResponse.json({ error: validation.error }, { status: 400 });
+    return Response.json({ error: validation.error }, { status: 400 });
   }
   const { ids, isActive } = validation.data;
 
@@ -326,7 +325,7 @@ export async function PATCH(request: Request) {
       metadata: { isActive, updated: updatedIds.length, notFound: notFoundIds, ids },
     });
 
-    return NextResponse.json(
+    return Response.json(
       {
         message: `${isActive ? "Activated" : "Deactivated"} ${updatedIds.length} connection(s)`,
         updated: updatedIds.length,
@@ -336,7 +335,7 @@ export async function PATCH(request: Request) {
     );
   } catch (error) {
     console.error("Error batch updating connections:", error);
-    return NextResponse.json({ error: "Failed to batch update connections" }, { status: 500 });
+    return Response.json({ error: "Failed to batch update connections" }, { status: 500 });
   }
 }
 
@@ -350,18 +349,18 @@ export async function DELETE(request: Request) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
-    return NextResponse.json(
+    return Response.json(
       { error: "ids must be a non-empty array of connection IDs" },
       { status: 400 }
     );
   }
 
   if (body.ids.length > 100) {
-    return NextResponse.json(
+    return Response.json(
       { error: "Cannot delete more than 100 connections at once" },
       { status: 400 }
     );
@@ -397,13 +396,13 @@ export async function DELETE(request: Request) {
       metadata: { count: deleted, ids: body.ids },
     });
 
-    return NextResponse.json(
+    return Response.json(
       { message: `Deleted ${deleted} connection(s)`, deleted },
       { status: 200 }
     );
   } catch (error) {
     console.log("Error batch deleting connections:", error);
-    return NextResponse.json({ error: "Failed to batch delete connections" }, { status: 500 });
+    return Response.json({ error: "Failed to batch delete connections" }, { status: 500 });
   }
 }
 

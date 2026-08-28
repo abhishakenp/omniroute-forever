@@ -1,9 +1,7 @@
-import { NextResponse } from "next/server";
 import { getAuditRequestContext, logAuditEvent } from "@/lib/compliance/index";
 import { classifyIpScope } from "@/lib/ipUtils";
 import { getCachedSettings } from "@/lib/localDb";
 import { SignJWT } from "jose";
-import { cookies } from "next/headers";
 import {
   ensurePersistentManagementPasswordHash,
   getStoredManagementPassword,
@@ -24,7 +22,7 @@ function getJwtSecret(): Uint8Array {
 
 // Test seam for cookie store injection without affecting runtime behavior.
 export const authRouteInternals = {
-  getCookieStore: cookies,
+  getCookieStore: null as null | (() => Promise<{ set: (name: string, value: string, opts: Record<string, unknown>) => void; delete: (name: string, opts?: Record<string, unknown>) => void }>),
 };
 
 export async function POST(request) {
@@ -43,7 +41,7 @@ export async function POST(request) {
         requestId: auditContext.requestId,
         metadata: { reason: "missing_jwt_secret" },
       });
-      return NextResponse.json(
+      return Response.json(
         { error: "Server misconfigured: JWT_SECRET not set. Contact administrator." },
         { status: 500 }
       );
@@ -53,7 +51,7 @@ export async function POST(request) {
     try {
       rawBody = await request.json();
     } catch {
-      return NextResponse.json(
+      return Response.json(
         {
           error: {
             message: "Invalid request",
@@ -67,11 +65,11 @@ export async function POST(request) {
     // Zod validation
     const validation = validateBody(loginSchema, rawBody);
     if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return Response.json({ error: validation.error }, { status: 400 });
     }
     const password = typeof validation.data.password === "string" ? validation.data.password : "";
     if (!password) {
-      return NextResponse.json({ error: "Invalid password payload" }, { status: 400 });
+      return Response.json({ error: "Invalid password payload" }, { status: 400 });
     }
     const settings = await getCachedSettings();
     const bruteForceEnabled = settings.bruteForceProtection !== false;
@@ -89,7 +87,7 @@ export async function POST(request) {
         requestId: auditContext.requestId,
         metadata: { retryAfterSeconds: guardCheck.retryAfterSeconds || 0 },
       });
-      return NextResponse.json(
+      return Response.json(
         { error: "Too many failed attempts. Try again later." },
         {
           status: 429,
@@ -117,7 +115,7 @@ export async function POST(request) {
         requestId: auditContext.requestId,
         metadata: { reason: "missing_persisted_password" },
       });
-      return NextResponse.json(
+      return Response.json(
         { error: "No password configured. Complete onboarding first.", needsSetup: true },
         { status: 403 }
       );
@@ -129,7 +127,7 @@ export async function POST(request) {
       const forceSecureCookie = process.env.AUTH_COOKIE_SECURE === "true";
       const forwardedProtoHeader = request.headers.get("x-forwarded-proto") || "";
       const forwardedProto = forwardedProtoHeader.split(",")[0].trim().toLowerCase();
-      const isHttpsRequest = forwardedProto === "https" || request.nextUrl?.protocol === "https:";
+      const isHttpsRequest = forwardedProto === "https:" || new URL(request.url).protocol === "https:";
       const useSecureCookie = forceSecureCookie || isHttpsRequest;
 
       const token = await new SignJWT({ authenticated: true })
@@ -137,16 +135,15 @@ export async function POST(request) {
         .setExpirationTime("30d")
         .sign(getJwtSecret());
 
-      const cookieStore = await authRouteInternals.getCookieStore();
-      cookieStore.set("auth_token", token, {
-        httpOnly: true,
-        secure: useSecureCookie,
-        sameSite: "lax",
-        path: "/",
-        // 30 days — bound the cookie lifetime to the JWT's 30d expiry so the browser
-        // drops it on the same schedule the token stops being valid (Seg3 hardening).
-        maxAge: 60 * 60 * 24 * 30,
-      });
+      const cookieParts = [
+        `auth_token=${token}`,
+        "HttpOnly",
+        `SameSite=Lax`,
+        "Path=/",
+        `Max-Age=${60 * 60 * 24 * 30}`,
+      ];
+      if (useSecureCookie) cookieParts.push("Secure");
+      const setCookieHeader = cookieParts.join("; ");
 
       logAuditEvent({
         action: "auth.login.success",
@@ -164,7 +161,7 @@ export async function POST(request) {
       });
 
       clearLoginAttempts(clientIp);
-      return NextResponse.json({ success: true });
+      return Response.json({ success: true }, { status: 200, headers: { "Set-Cookie": setCookieHeader } });
     }
 
     const failureDecision = recordLoginFailure(clientIp, { enabled: bruteForceEnabled });
@@ -191,7 +188,7 @@ export async function POST(request) {
     });
 
     if (!failureDecision.allowed) {
-      return NextResponse.json(
+      return Response.json(
         { error: "Too many failed attempts. Try again later." },
         {
           status: 429,
@@ -202,7 +199,7 @@ export async function POST(request) {
       );
     }
 
-    return NextResponse.json({ error: "Invalid password" }, { status: 401 });
+    return Response.json({ error: "Invalid password" }, { status: 401 });
   } catch (error) {
     console.error("[AUTH] Login failed:", error);
     logAuditEvent({
@@ -217,6 +214,6 @@ export async function POST(request) {
         message: error instanceof Error ? error.message : "unknown_error",
       },
     });
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return Response.json({ error: "Internal server error" }, { status: 500 });
   }
 }

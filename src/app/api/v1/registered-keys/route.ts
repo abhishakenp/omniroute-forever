@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isAuthenticated } from "@/shared/utils/apiAuth";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
@@ -24,7 +23,7 @@ const issueKeySchema = z.object({
  */
 export async function GET(request: Request) {
   if (!(await isAuthenticated(request))) {
-    return NextResponse.json({ error: { message: "Authentication required" } }, { status: 401 });
+    return Response.json({ error: { message: "Authentication required" } }, { status: 401 });
   }
 
   const { searchParams } = new URL(request.url);
@@ -33,10 +32,10 @@ export async function GET(request: Request) {
 
   try {
     const keys = listRegisteredKeys({ provider, accountId });
-    return NextResponse.json({ keys, total: keys.length });
+    return Response.json({ keys, total: keys.length });
   } catch (err) {
     console.error("[registered-keys] GET failed:", err);
-    return NextResponse.json({ error: "Failed to list registered keys" }, { status: 500 });
+    return Response.json({ error: "Failed to list registered keys" }, { status: 500 });
   }
 }
 
@@ -51,19 +50,19 @@ export async function GET(request: Request) {
  */
 export async function POST(request: Request) {
   if (!(await isAuthenticated(request))) {
-    return NextResponse.json({ error: { message: "Authentication required" } }, { status: 401 });
+    return Response.json({ error: { message: "Authentication required" } }, { status: 401 });
   }
 
   let rawBody: unknown;
   try {
     rawBody = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   const validation = validateBody(issueKeySchema, rawBody);
   if (isValidationFailure(validation)) {
-    return NextResponse.json({ error: validation.error }, { status: 400 });
+    return Response.json({ error: validation.error }, { status: 400 });
   }
 
   const { provider, accountId } = validation.data;
@@ -72,14 +71,14 @@ export async function POST(request: Request) {
   try {
     const quota = checkQuota(provider, accountId);
     if (!quota.allowed) {
-      return NextResponse.json(
+      return Response.json(
         { error: quota.errorMessage, errorCode: quota.errorCode },
         { status: 429 }
       );
     }
   } catch (err) {
     console.error("[registered-keys] quota check failed:", err);
-    return NextResponse.json({ error: "Quota check failed" }, { status: 500 });
+    return Response.json({ error: "Quota check failed" }, { status: 500 });
   }
 
   // ── Issue ──
@@ -87,7 +86,7 @@ export async function POST(request: Request) {
     const result = issueRegisteredKey(validation.data);
 
     if ("idempotencyConflict" in result) {
-      return NextResponse.json(
+      return Response.json(
         {
           error: "Idempotency key already used",
           errorCode: "IDEMPOTENCY_CONFLICT",
@@ -98,7 +97,7 @@ export async function POST(request: Request) {
     }
 
     const { rawKey, ...keyMeta } = result;
-    return NextResponse.json(
+    return Response.json(
       {
         key: rawKey, // ← shown ONCE only
         keyId: keyMeta.id,
@@ -114,6 +113,6 @@ export async function POST(request: Request) {
     );
   } catch (err) {
     console.error("[registered-keys] issue failed:", err);
-    return NextResponse.json({ error: "Failed to issue key" }, { status: 500 });
+    return Response.json({ error: "Failed to issue key" }, { status: 500 });
   }
 }

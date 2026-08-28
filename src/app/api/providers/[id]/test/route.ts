@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import {
@@ -824,19 +823,19 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
     const validation = validateBody(providerConnectionTestBodySchema, rawBody);
     if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return Response.json({ error: validation.error }, { status: 400 });
     }
     const { validationModelId } = validation.data;
 
     const data = await testSingleConnection(id, validationModelId);
 
     if (data.error === "Connection not found") {
-      return NextResponse.json({ error: "Connection not found" }, { status: 404 });
+      return Response.json({ error: "Connection not found" }, { status: 404 });
     }
 
-    return NextResponse.json(data);
+    return Response.json(data);
   } catch (error) {
     console.log("Error testing connection:", error);
-    return NextResponse.json({ error: "Test failed" }, { status: 500 });
+    return Response.json({ error: "Test failed" }, { status: 500 });
   }
 }

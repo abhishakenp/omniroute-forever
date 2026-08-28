@@ -1,6 +1,5 @@
 import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { createFile, listFiles, formatFileResponse, countFiles } from "@/lib/localDb";
-import { NextResponse } from "next/server";
 import { getApiKeyRequestScope } from "@/app/api/v1/_helpers/apiKeyScope";
 
 export async function OPTIONS() {
@@ -20,7 +19,7 @@ export async function POST(request: Request) {
     const expiresAfterSeconds = formData.get("expires_after[seconds]") as string;
 
     if (!file || !purpose) {
-      return NextResponse.json(
+      return Response.json(
         { error: { message: "Missing file or purpose", type: "invalid_request_error" } },
         { status: 400, headers: CORS_HEADERS }
       );
@@ -28,7 +27,7 @@ export async function POST(request: Request) {
 
     const MAX_FILE_BYTES = 512 * 1024 * 1024; // 512 MB
     if (file.size > MAX_FILE_BYTES) {
-      return NextResponse.json(
+      return Response.json(
         {
           error: {
             message: "File exceeds maximum allowed size of 512 MB",
@@ -62,10 +61,10 @@ export async function POST(request: Request) {
       expiresAt,
     });
 
-    return NextResponse.json(formatFileResponse(record), { headers: CORS_HEADERS });
+    return Response.json(formatFileResponse(record), { headers: CORS_HEADERS });
   } catch (error) {
     console.error("[FILES] Upload failed:", error);
-    return NextResponse.json(
+    return Response.json(
       { error: { message: "Upload failed", type: "server_error" } },
       { status: 500, headers: CORS_HEADERS }
     );
@@ -96,7 +95,7 @@ export async function GET(request: Request) {
   const data = files.slice(0, limit);
   const totalCount = countFiles({ apiKeyId: apiKeyId || undefined, purpose });
 
-  return NextResponse.json(
+  return Response.json(
     {
       object: "list",
       data: data.map((f) => formatFileResponse(f)),

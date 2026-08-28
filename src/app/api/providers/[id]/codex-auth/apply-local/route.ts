@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { ensureCliConfigWriteAllowed } from "@/shared/services/cliRuntime";
 import { CodexAuthFileError, writeCodexAuthFileToLocalCli } from "@/lib/oauth/utils/codexAuthFile";
@@ -7,7 +6,7 @@ import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 
 function toErrorResponse(error: unknown) {
   if (error instanceof CodexAuthFileError) {
-    return NextResponse.json(
+    return Response.json(
       {
         error: error.message,
         code: error.code,
@@ -17,7 +16,7 @@ function toErrorResponse(error: unknown) {
   }
 
   const message = sanitizeErrorMessage(error) || "Failed to apply Codex auth file";
-  return NextResponse.json({ error: message }, { status: 500 });
+  return Response.json({ error: message }, { status: 500 });
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -29,7 +28,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   try {
     const writeGuard = ensureCliConfigWriteAllowed();
     if (writeGuard) {
-      return NextResponse.json({ error: writeGuard, code: "writes_disabled" }, { status: 403 });
+      return Response.json({ error: writeGuard, code: "writes_disabled" }, { status: 403 });
     }
 
     const { id } = await params;
@@ -50,7 +49,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       },
     });
 
-    return NextResponse.json({
+    return Response.json({
       success: true,
       connectionId: id,
       connectionLabel: result.connectionLabel,

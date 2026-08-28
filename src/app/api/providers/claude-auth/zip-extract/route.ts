@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { extractClaudeAuthZip } from "@/lib/oauth/utils/claudeAuthZipExtract";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
@@ -11,7 +10,7 @@ export async function POST(request: Request) {
 
   const contentLength = Number(request.headers.get("content-length") || "0");
   if (contentLength > ZIP_BODY_LIMIT) {
-    return NextResponse.json(
+    return Response.json(
       { error: "ZIP file exceeds the 10 MB size limit", code: "file_too_large" },
       { status: 413 }
     );
@@ -21,14 +20,14 @@ export async function POST(request: Request) {
   try {
     const arrayBuffer = await request.arrayBuffer();
     if (arrayBuffer.byteLength > ZIP_BODY_LIMIT) {
-      return NextResponse.json(
+      return Response.json(
         { error: "ZIP file exceeds the 10 MB size limit", code: "file_too_large" },
         { status: 413 }
       );
     }
     buffer = Buffer.from(arrayBuffer);
   } catch {
-    return NextResponse.json({ error: "Failed to read request body" }, { status: 400 });
+    return Response.json({ error: "Failed to read request body" }, { status: 400 });
   }
 
   try {
@@ -42,9 +41,9 @@ export async function POST(request: Request) {
       }
     });
 
-    return NextResponse.json({ entries });
+    return Response.json({ entries });
   } catch (error) {
-    return NextResponse.json(
+    return Response.json(
       { error: sanitizeErrorMessage(error) || "Failed to extract ZIP", code: "extract_failed" },
       { status: 400 }
     );

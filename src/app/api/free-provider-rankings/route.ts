@@ -1,4 +1,3 @@
-import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { computeFreeProviderRankings } from "@/lib/freeProviderRankings";
@@ -28,7 +27,7 @@ export async function OPTIONS() {
   return handleCorsOptions();
 }
 
-export async function GET(request: NextRequest) {
+export async function GET(request: Request) {
   const url = new URL(request.url);
   const parsed = QuerySchema.safeParse({
     category: url.searchParams.get("category") || undefined,
@@ -38,7 +37,7 @@ export async function GET(request: NextRequest) {
   });
 
   if (!parsed.success) {
-    return NextResponse.json(
+    return Response.json(
       { error: "Invalid query parameters", details: parsed.error.flatten().fieldErrors },
       { status: 400, headers: CORS_HEADERS }
     );
@@ -50,5 +49,5 @@ export async function GET(request: NextRequest) {
     availableOnly,
   });
 
-  return NextResponse.json({ rankings }, { headers: CORS_HEADERS });
+  return Response.json({ rankings }, { headers: CORS_HEADERS });
 }

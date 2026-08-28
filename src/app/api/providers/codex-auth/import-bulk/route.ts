@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { CodexAuthFileError } from "@/lib/oauth/utils/codexAuthFile";
 import {
@@ -34,12 +33,12 @@ export async function POST(request: Request) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   const parsedBody = validateBody(importCodexAuthBulkSchema, body);
   if (isValidationFailure(parsedBody)) {
-    return NextResponse.json({ error: parsedBody.error }, { status: 400 });
+    return Response.json({ error: parsedBody.error }, { status: 400 });
   }
 
   const { entries, overwriteExisting } = parsedBody.data;
@@ -102,7 +101,7 @@ export async function POST(request: Request) {
     },
   });
 
-  return NextResponse.json({
+  return Response.json({
     success: created.length,
     failed: errors.length,
     total: entries.length,

@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { isAuthenticated } from "@/shared/utils/apiAuth";
@@ -40,7 +39,7 @@ export async function OPTIONS() {
 
 export async function GET(request: Request) {
   if (!(await isAuthenticated(request))) {
-    return NextResponse.json(buildErrorBody(401, "Authentication required"), {
+    return Response.json(buildErrorBody(401, "Authentication required"), {
       status: 401,
       headers: CORS_HEADERS,
     });
@@ -54,7 +53,7 @@ export async function GET(request: Request) {
   });
 
   if (!parsed.success) {
-    return NextResponse.json(
+    return Response.json(
       buildErrorBody(400, parsed.error.issues[0]?.message ?? "Invalid query parameters"),
       { status: 400, headers: CORS_HEADERS }
     );
@@ -63,7 +62,7 @@ export async function GET(request: Request) {
   const { type, sortBy, limit } = parsed.data;
   const pipelineTag = resolveHfPipelineTag(type);
   if (!pipelineTag) {
-    return NextResponse.json(
+    return Response.json(
       buildErrorBody(400, `Unsupported suggested-models type: ${type}`),
       { status: 400, headers: CORS_HEADERS }
     );
@@ -87,7 +86,7 @@ export async function GET(request: Request) {
     });
 
     if (!upstream.ok) {
-      return NextResponse.json(
+      return Response.json(
         buildErrorBody(502, `HuggingFace Hub API responded with status ${upstream.status}`),
         { status: 502, headers: CORS_HEADERS }
       );
@@ -103,7 +102,7 @@ export async function GET(request: Request) {
 
     const suggested = sortHfSuggestedModels(models, sortBy, limit);
 
-    return NextResponse.json(
+    return Response.json(
       {
         object: "list",
         type,
@@ -117,7 +116,7 @@ export async function GET(request: Request) {
       { headers: CORS_HEADERS }
     );
   } catch (err) {
-    return NextResponse.json(
+    return Response.json(
       buildErrorBody(502, err instanceof Error ? err.message : String(err)),
       { status: 502, headers: CORS_HEADERS }
     );

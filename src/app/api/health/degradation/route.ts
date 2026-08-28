@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import {
   getDegradationReport,
   getDegradationSummary,
@@ -11,20 +10,20 @@ export async function GET(req: Request) {
     const summaryStr = url.searchParams.get("summary");
 
     if (summaryStr === "true") {
-      return NextResponse.json({
+      return Response.json({
         summary: getDegradationSummary(),
         isDegraded: hasAnyDegradation(),
       });
     }
 
     const report = getDegradationReport();
-    return NextResponse.json({
+    return Response.json({
       active: hasAnyDegradation(),
       summary: getDegradationSummary(),
       features: report,
     });
   } catch (error) {
     console.error("[API ERROR] /api/health/degradation GET:", error);
-    return NextResponse.json({ error: "Failed to fetch degradation report." }, { status: 500 });
+    return Response.json({ error: "Failed to fetch degradation report." }, { status: 500 });
   }
 }

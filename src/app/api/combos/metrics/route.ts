@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import {
   getAllComboMetrics,
   getComboMetrics,
@@ -19,16 +18,16 @@ export async function GET(request) {
     if (comboName) {
       const metrics = getComboMetrics(comboName);
       if (!metrics) {
-        return NextResponse.json({ metrics: null, message: "No metrics for this combo yet" });
+        return Response.json({ metrics: null, message: "No metrics for this combo yet" });
       }
-      return NextResponse.json({ metrics });
+      return Response.json({ metrics });
     }
 
     const allMetrics = getAllComboMetrics();
-    return NextResponse.json({ metrics: allMetrics });
+    return Response.json({ metrics: allMetrics });
   } catch (error) {
     console.log("Error fetching combo metrics:", error);
-    return NextResponse.json({ error: "Failed to fetch combo metrics" }, { status: 500 });
+    return Response.json({ error: "Failed to fetch combo metrics" }, { status: 500 });
   }
 }
 
@@ -43,13 +42,13 @@ export async function DELETE(request) {
 
     if (comboName) {
       resetComboMetrics(comboName);
-      return NextResponse.json({ success: true, message: `Metrics reset for ${comboName}` });
+      return Response.json({ success: true, message: `Metrics reset for ${comboName}` });
     }
 
     resetAllComboMetrics();
-    return NextResponse.json({ success: true, message: "All combo metrics reset" });
+    return Response.json({ success: true, message: "All combo metrics reset" });
   } catch (error) {
     console.log("Error resetting combo metrics:", error);
-    return NextResponse.json({ error: "Failed to reset combo metrics" }, { status: 500 });
+    return Response.json({ error: "Failed to reset combo metrics" }, { status: 500 });
   }
 }

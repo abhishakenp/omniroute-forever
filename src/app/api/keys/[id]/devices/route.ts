@@ -15,7 +15,6 @@
  * @route /api/keys/[id]/devices
  */
 
-import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getApiKeyById } from "@/lib/db/apiKeys";
 import { getDeviceCount, getDeviceDetails } from "@omniroute/open-sse/services/deviceTracker.ts";
@@ -30,10 +29,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     const { id } = await params;
     const key = await getApiKeyById(id);
     if (!key || typeof key.id !== "string") {
-      return NextResponse.json(buildErrorBody(404, "Key not found"), { status: 404 });
+      return Response.json(buildErrorBody(404, "Key not found"), { status: 404 });
     }
 
-    return NextResponse.json({
+    return Response.json({
       keyId: key.id,
       name: typeof key.name === "string" ? key.name : "",
       count: getDeviceCount(key.id),
@@ -41,6 +40,6 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     });
   } catch (error) {
     log.error("keys", "Error fetching API key devices", error);
-    return NextResponse.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
+    return Response.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
   }
 }

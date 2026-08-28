@@ -7,7 +7,6 @@
  * with the API-key auth model used by `/v1/models` and projects out internal
  * routing details (account/connection ids, weights, internal labels).
  */
-import { NextResponse } from "next/server";
 import { getCombos } from "@/lib/localDb";
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
@@ -48,7 +47,7 @@ export async function GET(request: Request) {
       .map((c) => projectCombo(c as Record<string, unknown>, { includeCapabilities: true }))
       .filter((c): c is PublicCombo => c !== null);
 
-    return NextResponse.json(
+    return Response.json(
       { object: "list", data },
       { headers: { "Cache-Control": "no-store" } }
     );

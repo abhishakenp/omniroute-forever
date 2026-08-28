@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { isAuthenticated } from "@/shared/utils/apiAuth";
 import { checkQuota } from "@/lib/db/registeredKeys";
 
@@ -10,7 +9,7 @@ import { checkQuota } from "@/lib/db/registeredKeys";
  */
 export async function GET(request: Request) {
   if (!(await isAuthenticated(request))) {
-    return NextResponse.json({ error: { message: "Authentication required" } }, { status: 401 });
+    return Response.json({ error: { message: "Authentication required" } }, { status: 401 });
   }
 
   const { searchParams } = new URL(request.url);
@@ -19,7 +18,7 @@ export async function GET(request: Request) {
 
   try {
     const result = checkQuota(provider, accountId);
-    return NextResponse.json({
+    return Response.json({
       allowed: result.allowed,
       ...(result.errorCode ? { errorCode: result.errorCode, reason: result.errorMessage } : {}),
       provider: provider || null,
@@ -28,6 +27,6 @@ export async function GET(request: Request) {
     });
   } catch (err) {
     console.error("[quotas/check] error:", err);
-    return NextResponse.json({ error: "Quota check failed" }, { status: 500 });
+    return Response.json({ error: "Quota check failed" }, { status: 500 });
   }
 }

@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { getAllExpirations, getExpirationSummary } from "@/domain/providerExpiration";
 
 export async function GET() {
@@ -6,12 +5,12 @@ export async function GET() {
     const list = getAllExpirations();
     const summary = getExpirationSummary();
 
-    return NextResponse.json({
+    return Response.json({
       summary,
       list,
     });
   } catch (error) {
     console.error("[API ERROR] /api/providers/expiration GET:", error);
-    return NextResponse.json({ error: "Failed to fetch expiration metadata." }, { status: 500 });
+    return Response.json({ error: "Failed to fetch expiration metadata." }, { status: 500 });
   }
 }

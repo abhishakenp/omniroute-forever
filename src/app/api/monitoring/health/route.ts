@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { getProviderConnections, getCachedSettings } from "@/lib/localDb";
 import { buildHealthPayload } from "@/lib/monitoring/observability";
 import { APP_CONFIG } from "@/shared/constants/config";
@@ -22,7 +21,7 @@ const HEALTH_PAYLOAD_TTL_MS = 1000;
 export async function GET() {
   const cachedNow = Date.now();
   if (healthPayloadCache && cachedNow <= healthPayloadCache.expiresAt) {
-    return NextResponse.json(healthPayloadCache.payload);
+    return Response.json(healthPayloadCache.payload);
   }
 
   const readHealthValue = <T>(label: string, reader: () => T, fallback: T): T => {
@@ -183,10 +182,10 @@ export async function GET() {
     });
 
     healthPayloadCache = { payload, expiresAt: Date.now() + HEALTH_PAYLOAD_TTL_MS };
-    return NextResponse.json(payload);
+    return Response.json(payload);
   } catch (error) {
     console.error("[API] GET /api/monitoring/health error:", error);
-    return NextResponse.json({
+    return Response.json({
       status: "degraded",
       error: "Health check partially unavailable",
       timestamp: new Date().toISOString(),
@@ -211,7 +210,7 @@ export async function GET() {
  */
 export async function DELETE(request: Request) {
   if (!(await isAuthenticated(request))) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
@@ -226,13 +225,13 @@ export async function DELETE(request: Request) {
 
     console.log(`[API] DELETE /api/monitoring/health — Reset ${resetCount} circuit breakers`);
 
-    return NextResponse.json({
+    return Response.json({
       success: true,
       message: `Reset ${resetCount} circuit breaker(s) to healthy state`,
       resetCount,
     });
   } catch (error) {
     console.error("[API] DELETE /api/monitoring/health error:", error);
-    return NextResponse.json({ error: "Failed to reset circuit breakers" }, { status: 500 });
+    return Response.json({ error: "Failed to reset circuit breakers" }, { status: 500 });
   }
 }

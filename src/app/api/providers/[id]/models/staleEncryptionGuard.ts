@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { buildErrorBody } from "@omniroute/open-sse/utils/error";
 
 /**
@@ -26,5 +25,5 @@ export function buildStaleEncryptionKeyResponse(
   // client can key off the specific stale-encryption cause.
   const body = buildErrorBody(424, STALE_ENCRYPTION_MESSAGE);
   body.error.type = "storage_encryption_stale";
-  return NextResponse.json(body, { status: 424 });
+  return Response.json(body, { status: 424 });
 }

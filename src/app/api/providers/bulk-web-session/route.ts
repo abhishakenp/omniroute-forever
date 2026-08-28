@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { getAuditRequestContext, logAuditEvent } from "@/lib/compliance/index";
 import {
   getProviderAuditTarget,
@@ -29,18 +28,18 @@ export async function POST(request: Request) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   const validation = validateBody(bulkWebSessionImportSchema, body);
   if (isValidationFailure(validation)) {
-    return NextResponse.json({ error: validation.error }, { status: 400 });
+    return Response.json({ error: validation.error }, { status: 400 });
   }
 
   const { provider, entries, priority, globalPriority } = validation.data;
 
   if (!requiresWebSessionCredential(provider)) {
-    return NextResponse.json(
+    return Response.json(
       { error: `Provider '${provider}' does not require web-session credentials` },
       { status: 400 }
     );
@@ -48,7 +47,7 @@ export async function POST(request: Request) {
 
   const requirement = getWebSessionCredentialRequirement(provider);
   if (!requirement || requirement.kind === "none") {
-    return NextResponse.json(
+    return Response.json(
       { error: `Provider '${provider}' has no credential requirement` },
       { status: 400 }
     );
@@ -137,7 +136,7 @@ export async function POST(request: Request) {
     },
   });
 
-  return NextResponse.json(
+  return Response.json(
     {
       success: created.length,
       failed: errors.length,

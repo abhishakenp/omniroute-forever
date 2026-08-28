@@ -1,15 +1,7 @@
-import { NextResponse } from "next/server";
 import { getAuditRequestContext, logAuditEvent } from "@/lib/compliance/index";
-import { cookies } from "next/headers";
 
-export const logoutRouteInternals = {
-  getCookieStore: cookies,
-};
-
-export async function POST(request) {
+export async function POST(request: Request) {
   const auditContext = getAuditRequestContext(request);
-  const cookieStore = await logoutRouteInternals.getCookieStore();
-  cookieStore.delete("auth_token");
   logAuditEvent({
     action: "auth.logout.success",
     actor: "admin",
@@ -19,5 +11,8 @@ export async function POST(request) {
     ipAddress: auditContext.ipAddress || undefined,
     requestId: auditContext.requestId,
   });
-  return NextResponse.json({ success: true });
+  return Response.json(
+    { success: true },
+    { status: 200, headers: { "Set-Cookie": "auth_token=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0" } }
+  );
 }

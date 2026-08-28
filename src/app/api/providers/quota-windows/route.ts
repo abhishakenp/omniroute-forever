@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { getAllProviderQuotaWindows } from "@omniroute/open-sse/services/quotaPreflight.ts";
 import { getCachedSettings } from "@/lib/localDb";
 import { resolveResilienceSettings } from "@/lib/resilience/settings";
@@ -19,7 +18,7 @@ export async function GET(request: Request) {
     const windows = getAllProviderQuotaWindows();
     const settings = await getCachedSettings();
     const resilience = resolveResilienceSettings(settings);
-    return NextResponse.json({
+    return Response.json({
       windows,
       defaults: {
         globalThresholdPercent: resilience.quotaPreflight.defaultThresholdPercent,
@@ -28,6 +27,6 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     console.log("Error fetching quota windows:", error);
-    return NextResponse.json({ error: "Failed to fetch quota windows" }, { status: 500 });
+    return Response.json({ error: "Failed to fetch quota windows" }, { status: 500 });
   }
 }

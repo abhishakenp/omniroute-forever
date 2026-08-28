@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -51,12 +50,12 @@ export async function POST(request: Request) {
     const text = await request.text();
     if (text.trim()) body = JSON.parse(text);
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   const parsedBody = validateBody(applyLocalAgyAuthSchema, body);
   if (isValidationFailure(parsedBody)) {
-    return NextResponse.json({ error: parsedBody.error }, { status: 400 });
+    return Response.json({ error: parsedBody.error }, { status: 400 });
   }
   // Re-detecting a local login is an explicit refresh action: default to replacing
   // any existing connection for the same account unless the caller opts out.
@@ -70,7 +69,7 @@ export async function POST(request: Request) {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code;
     if (code === "ENOENT") {
-      return NextResponse.json(
+      return Response.json(
         {
           error:
             "No local Antigravity CLI login found. Run `agy`, sign in with Google, then try again.",
@@ -79,7 +78,7 @@ export async function POST(request: Request) {
         { status: 404 }
       );
     }
-    return NextResponse.json(
+    return Response.json(
       { error: "Could not read the local agy token file", code: "read_failed" },
       { status: 500 }
     );
@@ -111,15 +110,15 @@ export async function POST(request: Request) {
       },
     });
 
-    return NextResponse.json({
+    return Response.json({
       connection: sanitizeConnectionForResponse(connection as Record<string, unknown>),
       created,
     });
   } catch (error) {
     if (error instanceof AgyAuthFileError) {
-      return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
+      return Response.json({ error: error.message, code: error.code }, { status: error.status });
     }
-    return NextResponse.json(
+    return Response.json(
       { error: sanitizeErrorMessage(error) || "Failed to import local Antigravity CLI login" },
       { status: 500 }
     );

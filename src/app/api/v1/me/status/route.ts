@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 
 import { buildApiKeySelfServiceStatus } from "@/lib/usage/apiKeySelfService";
 import { hasSelfUsageScope } from "@/shared/constants/selfServiceScopes";
@@ -11,7 +10,7 @@ function extractBearerToken(request: Request): string | null {
 }
 
 function authError(status = 401) {
-  return NextResponse.json({ error: status === 401 ? "Unauthorized" : "Forbidden" }, { status });
+  return Response.json({ error: status === 401 ? "Unauthorized" : "Forbidden" }, { status });
 }
 
 export async function GET(request: Request) {
@@ -36,11 +35,11 @@ export async function GET(request: Request) {
       allowedConnections: metadata.allowedConnections,
     });
 
-    return NextResponse.json(status);
+    return Response.json(status);
   } catch (error) {
     if (error instanceof Error && error.message === "missing_self_usage_scope") {
       return authError(403);
     }
-    return NextResponse.json({ error: "Failed to build API key status" }, { status: 500 });
+    return Response.json({ error: "Failed to build API key status" }, { status: 500 });
   }
 }

@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { FREE_MODEL_BUDGETS } from "@omniroute/open-sse/config/freeModelCatalog";
 
@@ -19,9 +18,9 @@ export async function GET(request: Request) {
       tos: m.tos,
     }));
 
-    return NextResponse.json({ models });
+    return Response.json({ models });
   } catch (error) {
     console.error("Error fetching free models:", error);
-    return NextResponse.json({ models: [] });
+    return Response.json({ models: [] });
   }
 }

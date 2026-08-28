@@ -1,4 +1,3 @@
-import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { getRawProviderConnections, getProviderConnectionsCount } from "@/lib/db/providers";
@@ -116,11 +115,11 @@ function toConnectionState(
   };
 }
 
-export async function GET(req: NextRequest) {
+export async function GET(req: Request) {
   try {
     const params = querySchema.safeParse(Object.fromEntries(new URL(req.url).searchParams));
     if (!params.success) {
-      return NextResponse.json(
+      return Response.json(
         buildErrorBody(400, params.error.issues[0]?.message ?? "Invalid query parameters"),
         { status: 400 }
       );
@@ -238,9 +237,9 @@ export async function GET(req: NextRequest) {
       window: windowMeta,
       meta: { totalConnections, coolingDownCount, unhealthyBreakerCount, countsCapped, degraded },
     };
-    return NextResponse.json(response);
+    return Response.json(response);
   } catch (err) {
     console.error("[API] resilience/connections unexpected error:", err);
-    return NextResponse.json(buildErrorBody(500, sanitizeErrorMessage(err)), { status: 500 });
+    return Response.json(buildErrorBody(500, sanitizeErrorMessage(err)), { status: 500 });
   }
 }

@@ -8,7 +8,6 @@
  */
 
 import { jwtVerify } from "jose";
-import { cookies } from "next/headers";
 import { getSettings } from "@/lib/localDb";
 import { isPublicApiRoute } from "@/shared/constants/publicApiRoutes";
 import { extractApiKey } from "@/sse/services/auth";
@@ -234,15 +233,6 @@ export async function isDashboardSessionAuthenticated(
 
   if (!token) {
     token = getCookieValueFromHeader(requestHeaders, "auth_token");
-  }
-
-  if (!token) {
-    try {
-      const cookieStore = await cookies();
-      token = cookieStore.get("auth_token")?.value || null;
-    } catch {
-      token = null;
-    }
   }
 
   if (!token) return false;

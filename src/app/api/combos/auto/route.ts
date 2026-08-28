@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import {
   VALID_VARIANTS,
@@ -176,9 +175,9 @@ export async function GET(request: Request) {
       }
     }
 
-    return NextResponse.json({ combos });
+    return Response.json({ combos });
   } catch (error) {
     console.error("Error fetching auto combos:", error);
-    return NextResponse.json({ combos: [] });
+    return Response.json({ combos: [] });
   }
 }

@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isAuthenticated } from "@/shared/utils/apiAuth";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
@@ -16,12 +15,12 @@ const limitsSchema = z.object({
  */
 export async function GET(request: Request, { params }: { params: Promise<{ provider: string }> }) {
   if (!(await isAuthenticated(request))) {
-    return NextResponse.json({ error: { message: "Authentication required" } }, { status: 401 });
+    return Response.json({ error: { message: "Authentication required" } }, { status: 401 });
   }
 
   const { provider } = await params;
   const limits = getProviderKeyLimit(provider);
-  return NextResponse.json({ provider, limits: limits ?? null });
+  return Response.json({ provider, limits: limits ?? null });
 }
 
 /**
@@ -30,23 +29,23 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
  */
 export async function PUT(request: Request, { params }: { params: Promise<{ provider: string }> }) {
   if (!(await isAuthenticated(request))) {
-    return NextResponse.json({ error: { message: "Authentication required" } }, { status: 401 });
+    return Response.json({ error: { message: "Authentication required" } }, { status: 401 });
   }
 
   let rawBody: unknown;
   try {
     rawBody = await request.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   const validation = validateBody(limitsSchema, rawBody);
   if (isValidationFailure(validation)) {
-    return NextResponse.json({ error: validation.error }, { status: 400 });
+    return Response.json({ error: validation.error }, { status: 400 });
   }
 
   const { provider } = await params;
   setProviderKeyLimit(provider, validation.data);
   const updated = getProviderKeyLimit(provider);
-  return NextResponse.json({ provider, limits: updated });
+  return Response.json({ provider, limits: updated });
 }

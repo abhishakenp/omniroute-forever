@@ -1,6 +1,5 @@
 import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { getFile, getFileContent } from "@/lib/localDb";
-import { NextResponse } from "next/server";
 import { getApiKeyRequestScope } from "@/app/api/v1/_helpers/apiKeyScope";
 
 export async function OPTIONS() {
@@ -16,7 +15,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const file = getFile(id);
 
   if (!file || (file.apiKeyId !== null && file.apiKeyId !== apiKeyId && !scope.isSessionAuth)) {
-    return NextResponse.json(
+    return Response.json(
       { error: { message: "File not found", type: "invalid_request_error" } },
       { status: 404, headers: CORS_HEADERS }
     );
@@ -24,7 +23,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
   const content = getFileContent(id);
   if (!content) {
-    return NextResponse.json(
+    return Response.json(
       { error: { message: "File content not found", type: "invalid_request_error" } },
       { status: 404, headers: CORS_HEADERS }
     );

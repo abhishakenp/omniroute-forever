@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
@@ -38,19 +37,19 @@ export async function POST(request: Request) {
     try {
       rawBody = await request.json();
     } catch {
-      return NextResponse.json({ error: { message: "Invalid JSON body" } }, { status: 400 });
+      return Response.json({ error: { message: "Invalid JSON body" } }, { status: 400 });
     }
 
     const validation = validateBody(actionSchema, rawBody);
     if (!validation.success) {
-      return NextResponse.json({ error: { message: validation.error } }, { status: 400 });
+      return Response.json({ error: { message: validation.error } }, { status: 400 });
     }
 
     const result = await executeProviderHealthAutopilotAction(validation.data);
-    return NextResponse.json(result.body, { status: result.status });
+    return Response.json(result.body, { status: result.status });
   } catch (error) {
     console.error("[API] POST /api/providers/health-autopilot/actions error:", error);
-    return NextResponse.json(
+    return Response.json(
       { error: { message: "Failed to apply provider health autopilot action" } },
       { status: 500 }
     );

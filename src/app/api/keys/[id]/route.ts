@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import {
   deleteApiKey,
   getApiKeyById,
@@ -22,18 +21,18 @@ export async function GET(request, { params }) {
     const key = await getApiKeyById(id);
 
     if (!key) {
-      return NextResponse.json({ error: "Key not found" }, { status: 404 });
+      return Response.json({ error: "Key not found" }, { status: 404 });
     }
 
     // Mask the key value
     const keyValue = typeof key.key === "string" ? key.key : null;
-    return NextResponse.json({
+    return Response.json({
       ...key,
       key: keyValue ? keyValue.slice(0, 8) + "****" + keyValue.slice(-4) : null,
     });
   } catch (error) {
     log.error("keys", "Error fetching key", error);
-    return NextResponse.json({ error: "Failed to fetch key" }, { status: 500 });
+    return Response.json({ error: "Failed to fetch key" }, { status: 500 });
   }
 }
 
@@ -46,7 +45,7 @@ export async function PATCH(request, { params }) {
   try {
     rawBody = await request.json();
   } catch {
-    return NextResponse.json(
+    return Response.json(
       {
         error: {
           message: "Invalid request",
@@ -61,7 +60,7 @@ export async function PATCH(request, { params }) {
     const { id } = await params;
     const validation = validateBody(updateKeyPermissionsSchema, rawBody);
     if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return Response.json({ error: validation.error }, { status: 400 });
     }
     const {
       name,
@@ -117,13 +116,13 @@ export async function PATCH(request, { params }) {
 
     const updated = await updateApiKeyPermissions(id, payload);
     if (!updated) {
-      return NextResponse.json({ error: "Key not found" }, { status: 404 });
+      return Response.json({ error: "Key not found" }, { status: 404 });
     }
 
     // Auto sync to Cloud if enabled
     await syncKeysToCloudIfEnabled();
 
-    return NextResponse.json({
+    return Response.json({
       message: "API key settings updated successfully",
       ...(name !== undefined && { name }),
       ...(allowedModels !== undefined && { allowedModels }),
@@ -151,7 +150,7 @@ export async function PATCH(request, { params }) {
     });
   } catch (error) {
     log.error("keys", "Error updating key permissions", error);
-    return NextResponse.json({ error: "Failed to update permissions" }, { status: 500 });
+    return Response.json({ error: "Failed to update permissions" }, { status: 500 });
   }
 }
 
@@ -165,16 +164,16 @@ export async function DELETE(request, { params }) {
 
     const deleted = await deleteApiKey(id);
     if (!deleted) {
-      return NextResponse.json({ error: "Key not found" }, { status: 404 });
+      return Response.json({ error: "Key not found" }, { status: 404 });
     }
 
     // Auto sync to Cloud if enabled
     await syncKeysToCloudIfEnabled();
 
-    return NextResponse.json({ message: "Key deleted successfully" });
+    return Response.json({ message: "Key deleted successfully" });
   } catch (error) {
     log.error("keys", "Error deleting key", error);
-    return NextResponse.json({ error: "Failed to delete key" }, { status: 500 });
+    return Response.json({ error: "Failed to delete key" }, { status: 500 });
   }
 }
 

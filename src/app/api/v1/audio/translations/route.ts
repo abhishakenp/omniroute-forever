@@ -1,5 +1,4 @@
 // Allow large audio/video file uploads — 5min for processing large files (up to 2GB)
-export const maxDuration = 300;
 import { handleAudioTranslation } from "@omniroute/open-sse/handlers/audioTranslation.ts";
 import {
   getProviderCredentialsWithQuotaPreflight,

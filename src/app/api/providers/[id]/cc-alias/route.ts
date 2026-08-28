@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import {
   getCcAliasProviderSetting,
   setCcAliasProviderSetting,
@@ -36,9 +35,9 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       }
     }
 
-    return NextResponse.json({ provider, models });
+    return Response.json({ provider, models });
   } catch (error) {
-    return NextResponse.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
+    return Response.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
   }
 }
 
@@ -58,14 +57,14 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
   try {
     rawBody = await request.json();
   } catch {
-    return NextResponse.json(buildErrorBody(400, "Invalid JSON body"), { status: 400 });
+    return Response.json(buildErrorBody(400, "Invalid JSON body"), { status: 400 });
   }
 
   try {
     const { id } = await params;
     const validation = validateBody(updateCcAliasSettingSchema, rawBody);
     if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return Response.json({ error: validation.error }, { status: 400 });
     }
     const body = validation.data;
 
@@ -75,8 +74,8 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       setCcAliasModelSetting(id, body.modelId, body.value);
     }
 
-    return NextResponse.json({ success: true });
+    return Response.json({ success: true });
   } catch (error) {
-    return NextResponse.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
+    return Response.json(buildErrorBody(500, sanitizeErrorMessage(error)), { status: 500 });
   }
 }

@@ -23,7 +23,6 @@ import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { calculateModalCost } from "@/lib/usage/costCalculator";
 import { generateRequestId } from "@/shared/utils/requestId";
 
-export const dynamic = "force-dynamic";
 
 /**
  * `/v1/images/upscale` — image→image super-resolution.

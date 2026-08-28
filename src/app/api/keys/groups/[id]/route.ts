@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   getKeyGroupWithPermissions,
@@ -30,12 +29,12 @@ export async function GET(request: Request, { params }: RouteParams) {
     const { id } = await params;
     const group = getKeyGroupWithPermissions(id);
     if (!group) {
-      return NextResponse.json({ error: "Group not found" }, { status: 404 });
+      return Response.json({ error: "Group not found" }, { status: 404 });
     }
     const members = getGroupMembers(id);
-    return NextResponse.json({ group, members });
+    return Response.json({ group, members });
   } catch (error) {
-    return NextResponse.json({ error: "Failed to get group" }, { status: 500 });
+    return Response.json({ error: "Failed to get group" }, { status: 500 });
   }
 }
 
@@ -48,16 +47,16 @@ export async function PUT(request: Request, { params }: RouteParams) {
     const rawBody = await request.json();
     const validation = validateBody(updateKeyGroupSchema, rawBody);
     if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return Response.json({ error: validation.error }, { status: 400 });
     }
 
     const group = updateKeyGroup(id, validation.data);
     if (!group) {
-      return NextResponse.json({ error: "Group not found" }, { status: 404 });
+      return Response.json({ error: "Group not found" }, { status: 404 });
     }
-    return NextResponse.json({ group });
+    return Response.json({ group });
   } catch (error) {
-    return NextResponse.json({ error: "Failed to update group" }, { status: 500 });
+    return Response.json({ error: "Failed to update group" }, { status: 500 });
   }
 }
 
@@ -69,10 +68,10 @@ export async function DELETE(request: Request, { params }: RouteParams) {
     const { id } = await params;
     const deleted = deleteKeyGroup(id);
     if (!deleted) {
-      return NextResponse.json({ error: "Group not found" }, { status: 404 });
+      return Response.json({ error: "Group not found" }, { status: 404 });
     }
-    return NextResponse.json({ success: true });
+    return Response.json({ success: true });
   } catch (error) {
-    return NextResponse.json({ error: "Failed to delete group" }, { status: 500 });
+    return Response.json({ error: "Failed to delete group" }, { status: 500 });
   }
 }

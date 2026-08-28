@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
   clearModelUnavailability,
@@ -27,10 +26,10 @@ export async function GET(request: Request) {
 
   try {
     const items = getAvailabilityReport().sort((a, b) => b.remainingMs - a.remainingMs);
-    return NextResponse.json({ items });
+    return Response.json({ items });
   } catch (error: unknown) {
     console.error("[API] GET /api/resilience/model-cooldowns error:", error);
-    return NextResponse.json(
+    return Response.json(
       { error: getErrorMessage(error, "Failed to load cooldowns") },
       { status: 500 }
     );
@@ -45,26 +44,26 @@ export async function DELETE(request: Request) {
     const rawBody = await request.json().catch(() => ({}));
     const validation = validateBody(deleteCooldownSchema, rawBody);
     if (!validation.success) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      return Response.json({ error: validation.error }, { status: 400 });
     }
     const body = validation.data;
 
     if (body.all) {
       resetAllAvailability();
-      return NextResponse.json({ ok: true, clearedAll: true });
+      return Response.json({ ok: true, clearedAll: true });
     }
 
     const provider = typeof body.provider === "string" ? body.provider.trim() : "";
     const model = typeof body.model === "string" ? body.model.trim() : "";
     if (!provider || !model) {
-      return NextResponse.json({ error: "provider and model are required" }, { status: 400 });
+      return Response.json({ error: "provider and model are required" }, { status: 400 });
     }
 
     const removed = clearModelUnavailability(provider, model);
-    return NextResponse.json({ ok: true, removed });
+    return Response.json({ ok: true, removed });
   } catch (error: unknown) {
     console.error("[API] DELETE /api/resilience/model-cooldowns error:", error);
-    return NextResponse.json(
+    return Response.json(
       { error: getErrorMessage(error, "Failed to clear cooldown") },
       { status: 500 }
     );

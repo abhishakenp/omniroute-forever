@@ -1,4 +1,3 @@
-import { NextResponse } from "next/server";
 
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { buildProviderHealthAutopilotReport } from "@/lib/monitoring/providerHealthAutopilot";
@@ -19,10 +18,10 @@ export async function GET(request: Request) {
       includeHealthy: getBooleanParam(url.searchParams.get("includeHealthy"), false),
       includeActions: getBooleanParam(url.searchParams.get("includeActions"), true),
     });
-    return NextResponse.json(report);
+    return Response.json(report);
   } catch (error) {
     console.error("[API] GET /api/providers/health-autopilot error:", error);
-    return NextResponse.json(
+    return Response.json(
       { error: { message: "Failed to build provider health autopilot report" } },
       { status: 500 }
     );
