@@ -31,7 +31,13 @@ test("resolveAccountSemaphoreAccountKey returns null when nothing usable is pres
   assert.equal(resolveAccountSemaphoreAccountKey(undefined, undefined), null);
   assert.equal(resolveAccountSemaphoreAccountKey("", {}), null);
   // non-string / blank candidates are all rejected
-  assert.equal(resolveAccountSemaphoreAccountKey("", { id: 123, email: "   " } as unknown as Record<string, unknown>), null);
+  assert.equal(
+    resolveAccountSemaphoreAccountKey("", { id: 123, email: "   " } as unknown as Record<
+      string,
+      unknown
+    >),
+    null
+  );
 });
 
 test("resolveAccountSemaphoreMaxConcurrency parses finite numbers and numeric strings", () => {
@@ -44,16 +50,23 @@ test("resolveAccountSemaphoreMaxConcurrency parses finite numbers and numeric st
   assert.equal(resolveAccountSemaphoreMaxConcurrency({ maxConcurrent: " 3.5 " }), 3.5);
 });
 
-test("resolveAccountSemaphoreMaxConcurrency rejects non-finite / non-numeric / missing values", () => {
-  // exercises the private toFiniteNumberOrNull null branches indirectly
-  assert.equal(resolveAccountSemaphoreMaxConcurrency({ maxConcurrent: Infinity }), null);
-  assert.equal(resolveAccountSemaphoreMaxConcurrency({ maxConcurrent: NaN }), null);
-  assert.equal(resolveAccountSemaphoreMaxConcurrency({ maxConcurrent: "abc" }), null);
-  assert.equal(resolveAccountSemaphoreMaxConcurrency({ maxConcurrent: "" }), null);
-  assert.equal(resolveAccountSemaphoreMaxConcurrency({ maxConcurrent: "   " }), null);
-  assert.equal(resolveAccountSemaphoreMaxConcurrency({ maxConcurrent: true } as unknown as Record<string, unknown>), null);
-  assert.equal(resolveAccountSemaphoreMaxConcurrency({}), null);
-  assert.equal(resolveAccountSemaphoreMaxConcurrency(null), null);
+test("resolveAccountSemaphoreMaxConcurrency falls back to default for non-finite / non-numeric / missing values", () => {
+  // Invalid/missing maxConcurrent now falls back to the uniform default (4)
+  // instead of returning null — every provider gets concurrency-limited.
+  assert.equal(resolveAccountSemaphoreMaxConcurrency({ maxConcurrent: Infinity }), 4);
+  assert.equal(resolveAccountSemaphoreMaxConcurrency({ maxConcurrent: NaN }), 4);
+  assert.equal(resolveAccountSemaphoreMaxConcurrency({ maxConcurrent: "abc" }), 4);
+  assert.equal(resolveAccountSemaphoreMaxConcurrency({ maxConcurrent: "" }), 4);
+  assert.equal(resolveAccountSemaphoreMaxConcurrency({ maxConcurrent: "   " }), 4);
+  assert.equal(
+    resolveAccountSemaphoreMaxConcurrency({ maxConcurrent: true } as unknown as Record<
+      string,
+      unknown
+    >),
+    4
+  );
+  assert.equal(resolveAccountSemaphoreMaxConcurrency({}), 4);
+  assert.equal(resolveAccountSemaphoreMaxConcurrency(null), 4);
 });
 
 test("resolveAccountSemaphoreKey builds provider:accountKey when both resolve", () => {
@@ -78,19 +91,43 @@ test("resolveAccountSemaphoreKey builds provider:accountKey when both resolve", 
   );
 });
 
-test("resolveAccountSemaphoreKey returns null without a provider or account key", () => {
-  // no account key resolvable
+test("resolveAccountSemaphoreKey uses __default__ account when no connection/credentials, null only without provider", () => {
+  // no account key resolvable → uses __default__ (uniform concurrency for noAuth providers)
   assert.equal(
-    resolveAccountSemaphoreKey({ provider: "openai", model: "m", connectionId: null, credentials: null }),
+    resolveAccountSemaphoreKey({
+      provider: "openai",
+      model: "m",
+      connectionId: null,
+      credentials: null,
+    }),
+    "openai:__default__"
+  );
+  assert.equal(
+    resolveAccountSemaphoreKey({
+      provider: "auggie",
+      model: "sonnet4.6",
+      connectionId: null,
+      credentials: null,
+    }),
+    "auggie:__default__"
+  );
+  // provider missing → still null (can't gate without knowing the provider)
+  assert.equal(
+    resolveAccountSemaphoreKey({
+      provider: null,
+      model: "m",
+      connectionId: "conn",
+      credentials: null,
+    }),
     null
   );
-  // account key resolves but provider missing
   assert.equal(
-    resolveAccountSemaphoreKey({ provider: null, model: "m", connectionId: "conn", credentials: null }),
-    null
-  );
-  assert.equal(
-    resolveAccountSemaphoreKey({ provider: "", model: "m", connectionId: "conn", credentials: null }),
+    resolveAccountSemaphoreKey({
+      provider: "",
+      model: "m",
+      connectionId: "conn",
+      credentials: null,
+    }),
     null
   );
 });

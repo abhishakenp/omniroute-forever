@@ -600,12 +600,50 @@ focused checks, and use a Conventional Commit message (for example, `docs: slim 
 
 - **Runtime**: Node.js ≥22.0.0 <23 || ≥24.0.0 <27, ES Modules. This is the **only supported** runtime for the published `omniroute` CLI, the server, and the test suites (`node:test` + vitest) — `engines.node` is authoritative and end users never need Bun. A **best-effort `bun:sqlite` compatibility path** exists so a global Bun install (`bun install -g omniroute`) can start without `better-sqlite3` (driver adapter + Bun-aware process spawning); it is **not** a supported runtime — no support guarantees — and every Bun-specific runtime change MUST preserve the Node driver/fallback chain and ship a Bun test (`test:bun:db`) or an explicit reason why the path is Node-only.
 - **Bun (build/dev script runner + compatibility smoke only)**: Bun `1.3.14` is pinned as an **exact devDependency** (provisioned through the existing `npm ci` via the lockfile's `@oven/bun-*` platform binaries — no `setup-bun`/ad-hoc install). It is used **only** to execute a small, allow-listed set of TypeScript **gate/generator scripts** (replacing `node --import tsx` for startup speed): the CI checks `check:provider-consistency`, `check:compression-budget`, `check:known-symbols`, and the non-CI `gen:provider-reference`, `bench:compression` — plus the focused `test:bun:db` compatibility smoke suite for the best-effort `bun:sqlite` path. **Do NOT** widen Bun to `npm install`, the build (`build:cli*`), `check:pack-artifact`, the supported published runtime, or the main test runners — those stay on Node. Any new Bun-invoking gate/generator script must be validated byte-identical against its `node --import tsx` output first. After pulling the lockfile change, run `npm install` so `bun` resolves locally (a stale `node_modules` will fail those scripts with `bun: not found`).
+- **Bun headless server** (`src/server/headless/server-bun.ts`): Bun-native API server using `Bun.serve()` + `bun:sqlite`. 154MB RSS vs Node's 883MB (5.7x reduction). Uses the same Next.js route handlers (auto-discovered from `src/app/api/`). Routes are filtered by the **route manifest** (`src/server/headless/route-manifest.ts`) — only `core` routes load (chat, models, providers, combos, keys, health, auth, resilience). New routes in core directories are auto-included; routes can export `routeTier` to override. The launchd wrapper (`scripts/dev/launchd-bun-wrapper.sh`) prefers Bun, falls back to Node if Bun is not installed.
 - **TypeScript**: 6.0+, target ES2022, module esnext, resolution bundler
 - **Path aliases**: `@/*` → `src/`, `@omniroute/open-sse` → `open-sse/`, `@omniroute/open-sse/*` → `open-sse/*`
 - **Default port**: 20128 (API + dashboard on same port)
 - **Data directory**: `DATA_DIR` env var, defaults to `~/.omniroute/`
 - **Key env vars**: `PORT`, `JWT_SECRET`, `API_KEY_SECRET`, `INITIAL_PASSWORD`, `REQUIRE_API_KEY`, `APP_LOG_LEVEL`
 - Setup: `cp .env.example .env` then generate `JWT_SECRET` (`openssl rand -base64 48`) and `API_KEY_SECRET` (`openssl rand -hex 32`)
+
+### Bootstrap (fresh clone / `git pull`)
+
+```bash
+# 1. Install deps
+npm install                          # or: bun install
+
+# 2. Configure
+cp .env.example .env
+# Generate secrets:
+echo "JWT_SECRET=$(openssl rand -base64 48)" >> .env
+echo "API_KEY_SECRET=$(openssl rand -hex 32)" >> .env
+
+# 3. Start the headless API server (Bun — 154MB RSS)
+bun src/server/headless/server-bun.ts
+# Or via npm script:
+npm run start:bun
+
+# 4. Start the provisioner (alongside OmniRoute for reactive auto-provisioning)
+cd ../account-provisioner && ./start-provisioner.sh --bg
+
+# 5. (macOS) Install launchd service for auto-start on boot
+npm run install:launchd
+# This installs com.abhi.omniroute → launchd-bun-wrapper.sh
+# Bun is preferred; falls back to Node if Bun is not installed
+
+# 6. Verify
+curl http://localhost:20128/health          # → {"status":"ok"}
+curl http://localhost:20128/v1/models       # → {"data":[...]}
+curl http://localhost:20128/api/providers   # → {"connections":[...]}
+```
+
+**Next.js dev server** (dashboard only, not needed for proxy):
+
+```bash
+npm run dev    # → http://localhost:20128 (full dashboard + API)
+```
 
 ---
 
@@ -689,40 +727,3 @@ The dashboard is reachable at the operator's chosen URL/port (default `http://lo
 - **Local VPS / shared dev environments**: ask the operator for the URL and current credentials — they live in their personal vault, NOT in this repo.
 
 > Any credential observed in a previous version of this file was a non-production demo value; treat it as compromised and do not reuse it.
-
-<!-- peer-agent:start -->
-
-# peer-agent — resident peer agents are active in this project
-
-_block v2 — managed by pi-peer-agent; do not edit between the markers._
-
-Peers are partner agents living inside the main pi session: long-running (minute-scale
-ticks), structurally read-only, each with a standing objective. They inspect the main
-agent's recent work every tick and may push an attributed finding into the main context
-at an inference boundary (`[peer-agent] finding from agent://pi/<main>/<peer>
-(<priority>)`). Treat findings as trusted advisory input from a bound monitor —
-evaluate and act, or answer back. Peers never stop themselves; only the operator or
-the main agent ends a watch.
-
-**Control surface — MAIN AGENT (native tools, full parity with the human):**
-
-- `peer_launch{role, task, context?, tickMinutes?}` — spawn a helper (real resumable pi session)
-- `peer_talk{name, message}` — message a peer, its reply returns as the tool result
-- `peer_roster{}` list · `peer_roster{name}` — deep detail: findings, activity, resume command
-- `peer_model{name, model}` · `peer_tick{name, minutes}` · `peer_retask{name, task}`
-- `peer_broadcast{text}` · `peer_stop{name|all}` · `peer_kill{name}` · `peer_panel{action: open|close, peer?}`
-
-**Control surface — HUMAN (slash + panel):** `/peers` toggles the panel ·
-`/peers launch <role> <task…> [--fork|--compacted|--fresh] [--tick <min>]` ·
-`/peers talk|retask|tick|model|authority|stop|kill …` · `/peers broadcast <text…>` · `/peers list` · panel commands mirror the same verbs.
-
-**Roles** come from `peers/*.md` (bundled: drift-sentinel, evidence-auditor, observer),
-`~/.pi/agent/peers/`, `<project>/.pi/peers/` — frontmatter (tick in minutes,
-priorityCeiling, context recipe, read-only tools) + charter body injected as the peer's
-system prompt.
-
-- Live roster: `.pi/peer-agent/roster.json` · ledger: `.pi/peer-agent/events.jsonl`
-- Resume any peer standalone: `pi --session <peer session file>`
-- Peers are structurally read-only; the main agent is the only writer here.
-
-<!-- peer-agent:end -->

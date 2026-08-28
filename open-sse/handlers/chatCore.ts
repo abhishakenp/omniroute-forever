@@ -2745,18 +2745,17 @@ export async function handleChatCore({
               semaphoreKey: accountSemaphoreKey,
               max: accountSemaphoreMaxConcurrency,
             });
-            if (accountSemaphoreKey && accountSemaphoreMaxConcurrency != null) {
+            if (accountSemaphoreKey) {
               updatePendingScope(pendingScope, {
                 stage: "waiting_account_slot",
               });
             }
-            const releaseAccountSemaphore =
-              accountSemaphoreKey && accountSemaphoreMaxConcurrency != null
-                ? await acquireAccountSemaphore(accountSemaphoreKey, {
-                    maxConcurrency: accountSemaphoreMaxConcurrency,
-                    signal: streamController.signal,
-                  })
-                : () => {};
+            const releaseAccountSemaphore = accountSemaphoreKey
+              ? await acquireAccountSemaphore(accountSemaphoreKey, {
+                  maxConcurrency: accountSemaphoreMaxConcurrency,
+                  signal: streamController.signal,
+                })
+              : () => {};
             trace("post_semaphore");
             updatePendingScope(pendingScope, {
               stage: "waiting_rate_limit",

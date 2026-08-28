@@ -2,6 +2,26 @@ import { FORMATS } from "../../translator/formats.ts";
 import { buildAccountSemaphoreKey } from "../../services/accountSemaphore.ts";
 import { getHeaderValueCaseInsensitive } from "./headers.ts";
 
+/**
+ * Default per-provider concurrency cap when a connection has no explicit
+ * `maxConcurrent`. Applies uniformly to ALL providers — including noAuth/local
+ * providers (auggie, claude-cli, etc.) that have no connection row. This is the
+ * single-pass concurrency gate: every provider gets limited, no conditionals.
+ *
+ * Set `OMNIROUTE_DEFAULT_MAX_CONCURRENT=0` to disable (bypasses semaphore).
+ */
+const DEFAULT_PROVIDER_MAX_CONCURRENT = (() => {
+  const env = process.env.OMNIROUTE_DEFAULT_MAX_CONCURRENT;
+  if (env !== undefined) {
+    const n = Number(env);
+    if (Number.isFinite(n)) return n;
+  }
+  return 4;
+})();
+
+/** Synthetic account key used when a provider has no connection/credentials. */
+const DEFAULT_ACCOUNT_KEY = "__default__";
+
 function toFiniteNumberOrNull(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -40,8 +60,9 @@ export function resolveAccountSemaphoreAccountKey(
 
 export function resolveAccountSemaphoreMaxConcurrency(
   credentials: Record<string, unknown> | null | undefined
-): number | null {
-  return toFiniteNumberOrNull(credentials?.maxConcurrent);
+): number {
+  const explicit = toFiniteNumberOrNull(credentials?.maxConcurrent);
+  return explicit ?? DEFAULT_PROVIDER_MAX_CONCURRENT;
 }
 
 export function resolveAccountSemaphoreKey({
@@ -55,8 +76,9 @@ export function resolveAccountSemaphoreKey({
   connectionId: string | null | undefined;
   credentials: Record<string, unknown> | null | undefined;
 }): string | null {
-  const accountKey = resolveAccountSemaphoreAccountKey(connectionId, credentials);
-  if (!accountKey || !provider) return null;
+  if (!provider) return null;
+  const accountKey =
+    resolveAccountSemaphoreAccountKey(connectionId, credentials) ?? DEFAULT_ACCOUNT_KEY;
   return buildAccountSemaphoreKey({ provider, accountKey });
 }
 

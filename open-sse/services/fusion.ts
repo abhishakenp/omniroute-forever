@@ -28,12 +28,13 @@ export const FUSION_DEFAULTS = {
   stragglerGraceMs: 8000, // wait this long for laggards once quorum is reached
   panelHardTimeoutMs: 90000, // absolute cap so one hung model can't stall forever
   // Hard cap on panel size (issue #1905). Every panel member is fanned out in
-  // parallel and its full response text buffered in memory simultaneously —
-  // with the runtime heap capped (Dockerfile OMNIROUTE_MEMORY_MB, default
-  // 1024MB), a large panel (reported: ~73 models) with sizable concurrent
-  // responses can exceed the heap ceiling and OOM-crash the whole process.
-  // Reject oversized panels up front with a clean 400 instead.
-  maxPanel: 40,
+  // parallel and its full response text buffered in memory simultaneously.
+  // Lowered from 40 to 8: even with the uniform per-provider concurrency gate
+  // (accountSemaphore, default 4), a 40-model panel of the same provider would
+  // queue 36 requests and likely timeout the 90s panelHardTimeout. 8 keeps
+  // fusion responsive while bounding resource use. Overridable per-combo via
+  // combo.config.fusionTuning.maxPanel.
+  maxPanel: 8,
 } as const;
 
 export type FusionTuning = {
@@ -72,8 +73,7 @@ export function extractPanelText(json: unknown): string {
   // Gemini (parts carry .text without a type discriminator)
   const candidates = j.candidates as Array<Record<string, unknown>> | undefined;
   const parts = (candidates?.[0]?.content as Record<string, unknown> | undefined)?.parts as
-    | Array<{ text?: unknown }>
-    | undefined;
+    Array<{ text?: unknown }> | undefined;
   if (Array.isArray(parts)) {
     const t = parts.map((p) => (typeof p?.text === "string" ? p.text : "")).join("");
     if (t.trim()) return t;
