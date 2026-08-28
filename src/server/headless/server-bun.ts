@@ -24,78 +24,31 @@ import {
   type RouteContext,
   type CompiledRoute,
 } from "./router.ts";
+import { classifyRoute, scanRouteTier } from "./route-manifest.ts";
 
-// ── Route whitelist ────────────────────────────────────────────────────────
-// Only load routes that the proxy actually needs. The full 640-route set
-// includes gamification, skills marketplace, traffic inspector, tunnels,
-// VNC, compression, evals, playground, qdrant, redis, notion, obsidian, etc.
-// Each route module imports its deps at load time — 600+ modules = memory bloat.
-// The proxy needs: chat routing, models, providers, combos (presets), keys, health.
-const CORE_ROUTE_PREFIXES = [
-  // Chat routing — the core proxy function
-  "/api/v1/chat/completions",
-  "/api/v1/messages",
-  "/api/v1/messages/count_tokens",
-  "/api/v1/completions",
-  "/api/v1/responses",
-  "/api/v1/embeddings",
-  "/api/v1/moderations",
-  "/api/v1/rerank",
-  "/api/v1/audio/",
-  "/api/v1/images/",
-  "/api/v1/files",
-  "/api/v1/models",
-  "/api/v1/models/",
-  "/api/v1/completions",
-  "/api/v1/combos",
-  "/api/v1/quotas/check",
-  "/api/v1/me/status",
-  "/api/v1/ws",
-  // Provider connection management (provisioner adds/removes keys)
-  "/api/providers",
-  // Combos = presets (omni/code-free, omni/review-free, etc)
-  "/api/combos",
-  // API keys
-  "/api/keys",
-  // Health
-  "/api/monitoring/health",
-  "/api/health",
-  "/api/health/",
-  // Settings — only the root endpoint (combo defaults, requireLogin, etc)
-  // Sub-routes like settings/qdrant, settings/proxies, settings/free-proxies
-  // are dashboard-only and load heavy deps
-  "/api/settings",
-  // Synced models catalog
-  "/api/synced-available-models",
-  "/api/free-models",
-  "/api/free-tier/summary",
-  "/api/free-provider-rankings",
-  // Resilience / circuit breaker reset
-  "/api/resilience",
-  // Auth (login/logout for dashboard)
-  "/api/auth/status",
-  "/api/auth/login",
-  "/api/auth/logout",
-  // Provider-specific chat routes (e.g. /v1/providers/openrouter/chat/completions)
-  "/api/v1/providers/",
-];
-
-function isCoreRoute(routePath: string): boolean {
-  return CORE_ROUTE_PREFIXES.some((p) => {
-    // Prefixes ending with / are broad (match all sub-routes)
-    if (p.endsWith("/")) return routePath.startsWith(p);
-    // Non-slash prefixes: exact match only (no sub-routes)
-    return routePath === p;
-  });
-}
-
+// ── Route filtering ─────────────────────────────────────────────────────────
+// Routes are classified into tiers by the route manifest (route-manifest.ts).
+// The headless server loads only `core` routes — chat, models, providers,
+// combos, keys, health, auth, resilience. Dashboard/optional routes (640+)
+// are skipped to avoid loading their dependency trees at startup.
+//
+// New routes in core directories (v1/, providers/, combos/, etc.) are
+// automatically included. Routes can export `routeTier` to override.
 function discoverCoreRoutes(): CompiledRoute[] {
   const all = discoverRoutes();
-  const core = all.filter((r) => isCoreRoute(r.originalPath));
+  const core = all.filter((r) => {
+    const override = scanRouteTier(r.modulePath);
+    return classifyRoute(r.originalPath, override) === "core";
+  });
   console.log(`[bun] ${core.length}/${all.length} routes loaded (core-only mode)`);
   // Log skipped categories for visibility
-  const skipped = all.filter((r) => !isCoreRoute(r.originalPath));
-  const skippedCats = new Set(skipped.map((r) => r.originalPath.split("/").slice(2, 4).join("/")));
+  const skipped = all.filter((r) => {
+    const override = scanRouteTier(r.modulePath);
+    return classifyRoute(r.originalPath, override) !== "core";
+  });
+  const skippedCats = new Set(
+    skipped.map((r) => r.originalPath.split("/").slice(2, 4).join("/"))
+  );
   if (skipped.length > 0) {
     console.log(
       `[bun] Skipped ${skipped.length} routes (${[...skippedCats].slice(0, 10).join(", ")}…)`
