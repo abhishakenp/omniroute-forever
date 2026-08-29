@@ -25,7 +25,7 @@ export const PRE_SCREEN_CONCURRENCY = 5;
  * can still raise it per-combo via `targetTimeoutMs` (capped at the upstream ceiling), or set
  * a longer value for slow non-streaming reasoning combos.
  */
-export const DEFAULT_COMBO_TARGET_TIMEOUT_MS = 120_000;
+export const DEFAULT_COMBO_TARGET_TIMEOUT_MS = 30_000;
 
 /**
  * Small buffer added on top of the combo-cooldown-wait budget (see below) when deriving
@@ -151,12 +151,13 @@ const DEFAULT_COMBO_CONFIG = {
   pipeline_fallback: "single-provider",
   resetAwareQuotaCacheTtlMs: 0,
   resetAwareQuotaCacheMaxStaleMs: 0,
-  // Global combo timeout (0 = disabled). When set, limits the total wall-clock time
-  // the combo spends iterating through targets. After each target completes, if the
-  // elapsed time exceeds comboTimeoutMs, remaining targets are skipped and a 504 with
-  // aggregated error diagnostics is returned. Backward-compatible: 0 preserves the
-  // legacy unlimited-iteration behavior.
-  comboTimeoutMs: 0,
+  // Global combo timeout. Limits the total wall-clock time the combo spends
+  // iterating through targets. After each target completes, if the elapsed time
+  // exceeds comboTimeoutMs, remaining targets are skipped and a 504 with
+  // aggregated error diagnostics is returned. Without this, when all accounts
+  // are rate-limited, the combo cycles through all 50 models indefinitely,
+  // sending keepalive chunks until the client times out.
+  comboTimeoutMs: 60_000,
   shadowRouting: {
     enabled: false,
     targets: [],
