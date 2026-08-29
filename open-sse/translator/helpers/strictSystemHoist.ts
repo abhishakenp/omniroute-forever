@@ -1,5 +1,3 @@
-import { systemMessageMustBeFirst } from "../../../src/lib/memory/injection.ts";
-
 type Message = { role: string; content: unknown; [key: string]: unknown };
 
 function toTextContent(content: unknown): string {
@@ -13,6 +11,16 @@ function toTextContent(content: unknown): string {
       .join("\n");
   }
   return "";
+}
+
+/**
+ * Inline replacement for the deleted `src/lib/memory/injection.ts` helper.
+ * Returns true for providers that reject a non-first system message.
+ */
+function systemMessageMustBeFirst(provider: string | null | undefined): boolean {
+  if (!provider) return false;
+  const strict = ["anthropic", "claude", "gemini", "google"];
+  return strict.includes(provider.toLowerCase());
 }
 
 /**

@@ -90,10 +90,6 @@ export {
   deleteCombo,
 } from "./db/combos";
 export * from "./db/ccrBlocks";
-export * from "./db/compressionCacheStats";
-export * from "./db/compressionCombos";
-export * from "./db/compressionContextBudget";
-export * from "./db/compressionRunTelemetry";
 export * from "./db/jobRegistryDb";
 export * from "./db/modelContextOverrides";
 
@@ -227,13 +223,6 @@ export {
 } from "./db/backup";
 
 export type { ExportAllRows } from "./db/backup";
-
-export {
-  // Skills DB operations (#3500 slice 5)
-  updateSkill,
-} from "./db/skills";
-
-export type { SkillPatch } from "./db/skills";
 
 export {
   // Read Cache (cached wrappers for hot-read paths)
@@ -414,16 +403,6 @@ export {
 } from "./db/creditBalance";
 
 export {
-  insertCompressionAnalyticsRow,
-  getCompressionAnalyticsSummary,
-} from "./db/compressionAnalytics";
-
-export type {
-  CompressionAnalyticsRow,
-  CompressionAnalyticsSummary,
-} from "./db/compressionAnalytics";
-
-export {
   // Reasoning Replay Cache (#1628)
   setReasoningCache,
   getReasoningCache,
@@ -457,42 +436,6 @@ export {
   startSessionAccountAffinityCleanup,
   stopSessionAccountAffinityCleanupForTests,
 } from "./db/sessionAccountAffinity";
-
-export {
-  // Gamification & Leaderboard
-  updateScore,
-  getRank,
-  getTopN,
-  addXp,
-  getXp,
-  updateLevel,
-  unlockBadge,
-  hasBadge,
-  getBadges,
-  getBadgeDefinitions,
-  transferTokens,
-  getBalance,
-  getHistory,
-  createInviteToken,
-  getInviteByCode,
-  redeemInvite,
-  revokeInvite,
-  connectServer,
-  disconnectServer,
-  listServers,
-  getConnectedServerByKeyHash,
-} from "./db/gamification";
-
-export type {
-  LeaderboardRow,
-  UserLevelRow,
-  BadgeDefinition,
-  UserBadge,
-  XpAuditLogEntry,
-  TokenLedgerEntry,
-  InviteToken,
-  CommunityServer,
-} from "./db/gamification";
 
 export * from "./db/featureFlags";
 

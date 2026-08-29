@@ -28,7 +28,7 @@ done
 
 if [ -n "$BUN_BIN" ]; then
   echo "[launchd-wrapper] $(date '+%Y-%m-%dT%H:%M:%S') using bun: $BUN_BIN $("$BUN_BIN" --version)"
-  exec "$BUN_BIN" "$REPO_DIR/src/server/headless/server-bun.ts"
+  exec "$BUN_BIN" "$REPO_DIR/src/server/headless/server-elysia.ts"
 fi
 
 # ── Fallback: Node.js headless server ───────────────────────────────────────
