@@ -17,16 +17,32 @@
  */
 
 import { getExecutor } from "../../executors/index.ts";
-import { isCliproxyapiDeepModeEnabled } from "../../executors/cliproxyapi.ts";
-import { isDarioDeepModeEnabled } from "../../executors/dario.ts";
+// Thin gateway: cliproxyapi (38MB) + dario lazy — only needed for proxy modes.
+import { createRequire } from "node:module";
+const require_ = createRequire(import.meta.url);
+let _cliproxyapi: any = null;
+function getCliproxyapi() {
+  if (!_cliproxyapi) _cliproxyapi = require_("../../executors/cliproxyapi.ts");
+  return _cliproxyapi;
+}
+let _dario: any = null;
+function getDario() {
+  if (!_dario) _dario = require_("../../executors/dario.ts");
+  return _dario;
+}
 import { getCachedSettings } from "@/lib/db/readCache";
 import { getUpstreamProxyConfigCached } from "./comboContextCache.ts";
 import type { FallbackBackend } from "@/lib/db/upstreamProxy";
-import { wrapExecutorWithCliproxyapiModelMapping } from "./cliproxyModelMapping.ts";
-import {
-  resolveDedicatedCliproxyapiApiKey,
-  wrapExecutorWithCliproxyapiCredentials,
-} from "./cliproxyapiCredentials.ts";
+// Thin gateway: cliproxy model mapping + credentials lazy — only for proxy modes.
+let _cliproxyHelpers: any = null;
+function getCliproxyHelpers() {
+  if (!_cliproxyHelpers) _cliproxyHelpers = {
+    wrapExecutorWithCliproxyapiModelMapping: require_("./cliproxyModelMapping.ts").wrapExecutorWithCliproxyapiModelMapping,
+    resolveDedicatedCliproxyapiApiKey: require_("./cliproxyapiCredentials.ts").resolveDedicatedCliproxyapiApiKey,
+    wrapExecutorWithCliproxyapiCredentials: require_("./cliproxyapiCredentials.ts").wrapExecutorWithCliproxyapiCredentials,
+  };
+  return _cliproxyHelpers;
+}
 
 type LoggerLike =
   | {
@@ -64,7 +80,7 @@ async function loadCliproxyapiSettings(): Promise<{
       fallbackCodes: parseFallbackCodes(allSettings.cliproxyapi_fallback_codes) ?? [
         ...DEFAULT_FALLBACK_CODES,
       ],
-      dedicatedApiKey: resolveDedicatedCliproxyapiApiKey(allSettings),
+      dedicatedApiKey: getCliproxyHelpers().resolveDedicatedCliproxyapiApiKey(allSettings),
     };
   } catch {
     return { fallbackCodes: [...DEFAULT_FALLBACK_CODES], dedicatedApiKey: null };
@@ -80,8 +96,8 @@ function resolveCliproxyapiExecutor(
   cliproxyapiModelMapping: Record<string, unknown> | null,
   dedicatedApiKey: string | null
 ) {
-  return wrapExecutorWithCliproxyapiCredentials(
-    wrapExecutorWithCliproxyapiModelMapping(getExecutor("cliproxyapi"), cliproxyapiModelMapping),
+  return getCliproxyHelpers().wrapExecutorWithCliproxyapiCredentials(
+    getCliproxyHelpers().wrapExecutorWithCliproxyapiModelMapping(getExecutor("cliproxyapi"), cliproxyapiModelMapping),
     dedicatedApiKey
   );
 }
@@ -97,7 +113,7 @@ export async function resolveExecutorWithProxy(
   // upstream_proxy_config mode — one connection can deep-route while the provider's
   // default (and its other connections) stay native. Backward-compatible: connections
   // without the flag fall through to the existing per-provider behaviour untouched.
-  if (isCliproxyapiDeepModeEnabled(providerSpecificData)) {
+  if (getCliproxyapi().isCliproxyapiDeepModeEnabled(providerSpecificData)) {
     log?.info?.(
       "UPSTREAM_PROXY",
       `${prov} routed through CLIProxyAPI (per-connection claude-native override)`
@@ -110,7 +126,7 @@ export async function resolveExecutorWithProxy(
   // BOTH cliproxyapiMode and darioMode to "claude-native", CLIProxyAPI's
   // existing behaviour keeps winning — the least-surprising precedence for
   // configs that predate this field, and the simplest to reason about.
-  if (isDarioDeepModeEnabled(providerSpecificData)) {
+  if (getDario().isDarioDeepModeEnabled(providerSpecificData)) {
     log?.info?.(
       "UPSTREAM_PROXY",
       `${prov} routed through Dario (per-connection claude-native override)`

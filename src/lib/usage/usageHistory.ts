@@ -7,7 +7,7 @@
  * @module lib/usage/usageHistory
  */
 
-import { getDbInstance } from "../db/core";
+import { getDbInstance, isCloud, isBuildPhase } from "../db/core";
 import { protectPayloadForLog } from "../logPayloads";
 import {
   resolveOrphanedUsageAccountIdentity,
@@ -31,7 +31,8 @@ import {
   scheduleCompletedDetailCleanup,
   storeCompletedDetail,
 } from "./completedRequestDetails";
-import { shouldPersistToDisk } from "./migrations";
+// Inline shouldPersistToDisk to avoid importing ./migrations which pulls in yazl + piiSanitizer (75MB).
+const shouldPersistToDisk = !isCloud && !isBuildPhase;
 import { emitUsageRecorded } from "./usageEvents";
 import {
   getLoggedInputTokens,

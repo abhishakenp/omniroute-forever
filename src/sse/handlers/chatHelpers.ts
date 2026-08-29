@@ -101,7 +101,7 @@ function isCodexNativeResponsesRequest(
 async function hasOnlyActiveCodexAccount() {
   try {
     const { getProviderConnections } = await import("@/lib/db/providers");
-    const connections = await getProviderConnections({ isActive: true });
+    const connections = await getProviderConnections({ isActive: true, excludeTerminalStatus: true }, undefined, undefined, ["id", "provider"]);
     const providers = new Set(
       connections
         .map((connection: any) => String(connection?.provider || "").trim())

@@ -18,7 +18,6 @@
  */
 
 import { getUpscaleProvider, parseUpscaleModel } from "../config/upscaleRegistry.ts";
-import { handleAdobeFireflyImageUpscale } from "./imageUpscale/adobeFirefly.ts";
 import { handleStabilityImageUpscale } from "./imageUpscale/stability.ts";
 import { handleTopazImageUpscale } from "./imageUpscale/topaz.ts";
 import type {
@@ -72,14 +71,11 @@ export async function handleImageUpscale({
 
   switch (providerConfig.format) {
     case "adobe-firefly-upscale":
-      return handleAdobeFireflyImageUpscale({
-        model,
-        provider,
-        body,
-        credentials: resolvedCredentials,
-        log,
-        ...(fetchImpl ? { fetchImpl } : {}),
-      });
+      return {
+        success: false,
+        status: 503,
+        error: "adobe-firefly upscale is not available (browser executor removed)",
+      } as UpscaleHandlerResult;
     case "stability-upscale":
       return handleStabilityImageUpscale({
         model,

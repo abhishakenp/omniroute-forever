@@ -1,7 +1,14 @@
 // Claude helper functions for translator
+import { createRequire } from "node:module";
 import { DEFAULT_THINKING_CLAUDE_SIGNATURE } from "../../config/defaultThinkingSignature.ts";
-import { lookupReasoning, recordReplay } from "../../services/reasoningCache.ts";
 import { getModelTargetFormat } from "../../config/providerModels.ts";
+
+const require_ = createRequire(import.meta.url);
+let _reasoningCache: typeof import("../../services/reasoningCache.ts") | null = null;
+function getReasoningCache() {
+  if (!_reasoningCache) _reasoningCache = require_("../../services/reasoningCache.ts");
+  return _reasoningCache;
+}
 import { NON_ANTHROPIC_THINKING_PLACEHOLDER } from "../../utils/reasoningPlaceholder.ts";
 
 export { NON_ANTHROPIC_THINKING_PLACEHOLDER } from "../../utils/reasoningPlaceholder.ts";
@@ -646,10 +653,10 @@ export function prepareClaudeRequest(
                 if (!text) {
                   const pairedToolUseId = toolUseIds[thinkingBlockIdx];
                   if (pairedToolUseId) {
-                    const cached = lookupReasoning(pairedToolUseId);
+                    const cached = getReasoningCache().lookupReasoning(pairedToolUseId);
                     if (cached) {
                       text = cached;
-                      recordReplay();
+                      getReasoningCache().recordReplay();
                     }
                   }
                 }
@@ -688,10 +695,10 @@ export function prepareClaudeRequest(
             let text = "";
             const firstToolUseId = toolUseIds[0];
             if (firstToolUseId) {
-              const cached = lookupReasoning(firstToolUseId);
+              const cached = getReasoningCache().lookupReasoning(firstToolUseId);
               if (cached) {
                 text = cached;
-                recordReplay();
+                getReasoningCache().recordReplay();
               }
             }
             content.unshift({

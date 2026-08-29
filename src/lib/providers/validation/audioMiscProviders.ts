@@ -3,7 +3,6 @@
 // poe. Extracted from validation.ts (god-file decomposition) — top-level functions with no
 // dispatcher-state captures; behavior is byte-identical to the original inline defs.
 import { getRegistryEntry } from "@omniroute/open-sse/config/providerRegistry.ts";
-import { POE_DEFAULT_BASE_URL } from "@omniroute/open-sse/config/providers/registry/poe/index.ts";
 import { normalizeBaseUrl } from "./urlHelpers";
 import {
   applyCustomUserAgent,
@@ -25,6 +24,9 @@ import {
 } from "@omniroute/open-sse/config/maritalk.ts";
 import { signAwsRequest } from "@omniroute/open-sse/utils/awsSigV4.ts";
 import { resolveAlibabaProviderBaseUrl } from "@/shared/constants/alibabaProviderRegions";
+
+// Stub for deleted poe provider registry.
+const POE_DEFAULT_BASE_URL = "https://api.poe.com/v1";
 
 export async function validateDeepgramProvider({ apiKey, providerSpecificData = {} }: any) {
   try {

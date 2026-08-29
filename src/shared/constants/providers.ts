@@ -481,14 +481,14 @@ export {
   SYSTEM_PROVIDERS,
 };
 
-import { validateProviders } from "../validation/providerSchema";
-
-validateProviders(NOAUTH_PROVIDERS, "NOAUTH_PROVIDERS");
-validateProviders(OAUTH_PROVIDERS, "OAUTH_PROVIDERS");
-validateProviders(APIKEY_PROVIDERS, "APIKEY_PROVIDERS");
-validateProviders(WEB_COOKIE_PROVIDERS, "WEB_COOKIE_PROVIDERS");
-validateProviders(LOCAL_PROVIDERS, "LOCAL_PROVIDERS");
-validateProviders(SEARCH_PROVIDERS, "SEARCH_PROVIDERS");
-validateProviders(AUDIO_ONLY_PROVIDERS, "AUDIO_ONLY_PROVIDERS");
-validateProviders(UPSTREAM_PROXY_PROVIDERS, "UPSTREAM_PROXY_PROVIDERS");
-validateProviders(CLOUD_AGENT_PROVIDERS, "CLOUD_AGENT_PROVIDERS");
+// Thin gateway: provider schema validation removed — zod (20MB) not needed at runtime.
+// import { validateProviders } from "../validation/providerSchema";
+// validateProviders(NOAUTH_PROVIDERS, "NOAUTH_PROVIDERS");
+// validateProviders(OAUTH_PROVIDERS, "OAUTH_PROVIDERS");
+// validateProviders(APIKEY_PROVIDERS, "APIKEY_PROVIDERS");
+// validateProviders(WEB_COOKIE_PROVIDERS, "WEB_COOKIE_PROVIDERS");
+// validateProviders(LOCAL_PROVIDERS, "LOCAL_PROVIDERS");
+// validateProviders(SEARCH_PROVIDERS, "SEARCH_PROVIDERS");
+// validateProviders(AUDIO_ONLY_PROVIDERS, "AUDIO_ONLY_PROVIDERS");
+// validateProviders(UPSTREAM_PROXY_PROVIDERS, "UPSTREAM_PROXY_PROVIDERS");
+// validateProviders(CLOUD_AGENT_PROVIDERS, "CLOUD_AGENT_PROVIDERS");

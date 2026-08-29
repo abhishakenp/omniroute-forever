@@ -7,8 +7,9 @@
 
 import { parseModelFromRegistry } from "./registryUtils.ts";
 import { RUNWAYML_SUPPORTED_VIDEO_MODELS } from "./runway.ts";
-import { SEGMIND_VIDEO_MODELS } from "./providers/registry/segmind/videoModels.ts";
-import { toRegistryVideoModels } from "../services/adobeFireflyModels.ts";
+
+// Stub for deleted segmind provider registry.
+const SEGMIND_VIDEO_MODELS: never[] = [];
 
 interface VideoModel {
   id: string;
@@ -337,7 +338,7 @@ export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
     authType: "apikey",
     authHeader: "bearer",
     format: "adobe-firefly-video",
-    models: toRegistryVideoModels(),
+    models: [],
   },
 };
 

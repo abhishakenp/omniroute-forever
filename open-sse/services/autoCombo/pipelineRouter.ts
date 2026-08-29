@@ -8,7 +8,6 @@
  * @module services/autoCombo/pipelineRouter
  */
 
-import { classifyPromptIntent, type IntentType } from "../intentClassifier.ts";
 import {
   executePipeline,
   buildPipelineConfig,
@@ -18,6 +17,9 @@ import {
 } from "../../../src/domain/pipeline.ts";
 import { renderPrompt } from "../../../src/domain/prompts.ts";
 import { getTaskFitness } from "./taskFitness.ts";
+
+// IntentType removed — inline the type for the mapping below.
+type IntentType = "code" | "math" | "reasoning" | "creative" | "simple" | "medium";
 
 // ---------------------------------------------------------------------------
 // Fitness tiers — map pipeline behavior to model fitness thresholds
@@ -270,7 +272,8 @@ export async function handlePipelineCombo({
   const systemMsg = messages.find((m) => m.role === "system");
   const systemText = typeof systemMsg?.content === "string" ? systemMsg.content : undefined;
 
-  const intent = classifyPromptIntent(promptText, systemText);
+  // Intent classification removed for thin gateway — default to "simple".
+  const intent: IntentType = "simple";
   const taskType = INTENT_TO_TASK[intent] ?? "simple";
 
   log.info("PIPELINE", `Intent: ${intent} → task: ${taskType}`);

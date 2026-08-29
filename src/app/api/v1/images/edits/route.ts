@@ -1,5 +1,4 @@
 import {
-  handleAdobeFireflyImageGeneration,
   handleCodexImageEdit,
   handleImageEdit,
   handleOpenAIImageEdit,
@@ -267,31 +266,10 @@ async function handleAdobeFireflyEditRequest(params: {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: image");
   }
 
-  const result = await handleAdobeFireflyImageGeneration({
-    provider: parsed.provider,
-    model: parsed.model,
-    providerConfig,
-    body: {
-      prompt,
-      size: size ?? undefined,
-      response_format: responseFormat ?? undefined,
-      n: 1,
-      image_url: dataUrls[0],
-      image: dataUrls.length === 1 ? dataUrls[0] : dataUrls,
-      image_urls: dataUrls,
-      images: dataUrls,
-    },
-    credentials,
-    log,
-  });
-
-  if ((result as { success?: boolean }).success) {
-    await clearRecoveredProviderState(credentials);
-    return jsonResponse((result as { data?: unknown }).data);
-  }
-  return jsonResponse(
-    toJsonErrorPayload((result as { error?: unknown }).error, "Image edit provider error"),
-    (result as { status?: number }).status ?? HTTP_STATUS.BAD_GATEWAY
+  // Adobe Firefly image generation removed (browser executor deleted).
+  return errorResponse(
+    HTTP_STATUS.SERVICE_UNAVAILABLE,
+    "Adobe Firefly image edit is not available (browser executor removed)"
   );
 }
 

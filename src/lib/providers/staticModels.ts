@@ -9,9 +9,11 @@ import {
 import { ANTIGRAVITY_PUBLIC_MODELS } from "@omniroute/open-sse/config/antigravityModelAliases.ts";
 import { getStaticQoderModels } from "@omniroute/open-sse/services/qoderCli.ts";
 import { getSearchProvider } from "@omniroute/open-sse/config/searchRegistry.ts";
-import { BAILIAN_CODING_PLAN_MODELS } from "@omniroute/open-sse/config/providers/registry/bailian-coding-plan/index.ts";
 
 import { getModelsByProviderId } from "@/shared/constants/models";
+
+// Stub for deleted bailian-coding-plan provider registry.
+const BAILIAN_CODING_PLAN_MODELS: readonly never[] = [];
 
 export type LocalCatalogModel = {
   id: string;

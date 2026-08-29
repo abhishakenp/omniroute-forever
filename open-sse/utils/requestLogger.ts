@@ -1,4 +1,4 @@
-import { getPendingById } from "@/lib/usage/usageHistory";
+import { getPendingById } from "@/lib/usageDb";
 import { getChatLogMaxDepth } from "@/lib/logEnv";
 import { sanitizeErrorMessage } from "./error.ts";
 

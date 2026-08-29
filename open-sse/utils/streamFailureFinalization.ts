@@ -1,7 +1,7 @@
 import {
   finalizeMostRecentPendingRequest,
   finalizePendingRequestById,
-} from "@/lib/usage/usageHistory.ts";
+} from "@/lib/usageDb";
 
 import { HTTP_STATUS } from "../config/constants.ts";
 import { buildErrorBody } from "./error.ts";

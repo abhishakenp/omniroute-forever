@@ -84,7 +84,6 @@ import {
   persistDiscoveredModels,
 } from "@/lib/providerModels/modelDiscovery";
 import { buildProviderModelsUrl, getDiscoveryClientVersionOptions } from "./discoveryClientVersion";
-import { getAdobeModels } from "./adobeFireflyDiscovery";
 import {
   parseGeminiModelsList,
   type GeminiDiscoveryModel,
@@ -429,8 +428,13 @@ export async function GET(
     };
 
     if (provider === "adobe-firefly") {
-      const discovery = await getAdobeModels(apiKey, accessToken, connection.providerSpecificData);
-      return buildResponse({ provider, connectionId, ...discovery });
+      return buildResponse({
+        provider,
+        connectionId,
+        models: [],
+        source: "local_catalog",
+        warning: "Adobe Firefly model discovery removed (browser executor deleted)",
+      });
     }
 
     const maybeReturnCachedDiscovery = () => {

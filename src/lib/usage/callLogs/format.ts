@@ -43,11 +43,11 @@ export function normalizeDetailState(value: unknown): CallLogDetailState {
 
 export function sanitizeErrorForLog(error: unknown): unknown {
   if (error === null || error === undefined) return null;
-  if (typeof error === "string") return sanitizePII(error).text;
+  if (typeof error === "string") return sanitizePII(error);
   if (error instanceof Error) {
     return {
-      message: sanitizePII(error.message).text,
-      stack: sanitizePII(error.stack || "").text || undefined,
+      message: sanitizePII(error.message),
+      stack: sanitizePII(error.stack || "") || undefined,
       name: error.name,
     };
   }
@@ -111,7 +111,7 @@ export function buildRequestSummary(
 
   const summary: JsonRecord = {};
   if (typeof body.query === "string" && body.query.trim().length > 0) {
-    summary.query = sanitizePII(body.query).text;
+    summary.query = sanitizePII(body.query);
   }
 
   const filters = Object.fromEntries(

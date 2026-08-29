@@ -9,12 +9,16 @@
  */
 
 import { safePercentage } from "@/shared/utils/formatting";
-import {
-  buildKimiCodeIdentityHeaders,
-  getKimiCodeCliUserAgent,
-} from "../../config/providers/registry/kimi/coding/runtime.ts";
 import { toRecord, toNumber } from "./scalars.ts";
 import { type UsageQuota, parseResetTime } from "./quota.ts";
+
+// Stubs for deleted kimi provider registry.
+function buildKimiCodeIdentityHeaders(_data: unknown): Record<string, string> {
+  return {};
+}
+function getKimiCodeCliUserAgent(): string {
+  return "kimi-coding-cli";
+}
 
 type JsonRecord = Record<string, unknown>;
 

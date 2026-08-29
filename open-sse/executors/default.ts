@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
-import { mapNvidiaGlm52ReasoningParams } from "./base/reasoningEffort.ts";
 import { PROVIDERS, OAUTH_ENDPOINTS } from "../config/constants.ts";
 import { getAccessToken } from "../services/tokenRefresh.ts";
 
@@ -10,7 +10,6 @@ import {
   CLAUDE_CODE_COMPATIBLE_DEFAULT_CHAT_PATH,
   joinClaudeCodeCompatibleUrl,
 } from "../services/claudeCodeCompatible.ts";
-import { getGigachatAccessToken } from "../services/gigachatAuth.ts";
 import { getRegistryEntry } from "../config/providerRegistry.ts";
 import { getModelTargetFormat } from "../config/providerModels.ts";
 import {
@@ -31,8 +30,6 @@ import {
   getTargetFormat,
   isClaudeCodeCompatible,
 } from "../services/provider.ts";
-import { ensureToolMessageNames } from "./kimiToolNames.ts";
-import { getSapResourceGroup } from "../config/sap.ts";
 import {
   normalizeBailianMessagesUrl,
   normalizeDataRobotChatUrl,
@@ -44,27 +41,108 @@ import {
   normalizeOpenAIChatUrl,
   getOpenRouterConnectionPreset,
 } from "./default/urlNormalizers.ts";
-import {
-  isPoeMessagesEligibleModel,
-  resolvePoeUpstreamUrl,
-} from "../config/providers/registry/poe/index.ts";
-import { buildMaritalkChatUrl } from "../config/maritalk.ts";
 import { LOCAL_PROVIDERS } from "@/shared/constants/providers";
 import { isForbiddenCustomHeaderName } from "@/shared/constants/upstreamHeaders";
-import { getClaudeCodeCompatibleRequestDefaults } from "@/lib/providers/requestDefaults";
-import { applyClineAuthHeaders } from "@/shared/utils/clineAuth";
 import {
   normalizeHerokuChatUrl,
   normalizeDatabricksChatUrl,
   normalizeSnowflakeChatUrl,
   normalizeGigachatChatUrl,
 } from "@/lib/providers/validation/urlHelpers";
-import { forwardOpencodeClientHeaders } from "../utils/opencodeHeaders.ts";
-import { resolveZaiUrl } from "./default/zaiFormatOverride.ts";
-import { normalizePoolConfig } from "./default/poolConfig.ts";
-import { acquireNvidiaConcurrencySlot } from "./default/nvidiaConcurrencyGate.ts";
-import { resolveAlibabaProviderBaseUrl } from "@/shared/constants/alibabaProviderRegions";
-import { usesCcWireImage } from "../services/ccWireImageBuiltins.ts";
+
+const require_ = createRequire(import.meta.url);
+
+// Lazy provider-specific imports — only loaded when the relevant provider is
+// actually used, keeping default.ts cheap for the common OpenAI/Anthropic path.
+let _gigachatAuth: typeof import("../services/gigachatAuth.ts") | null = null;
+function getGigachatAuth() {
+  if (!_gigachatAuth) _gigachatAuth = require_("../services/gigachatAuth.ts");
+  return _gigachatAuth;
+}
+
+let _sap: typeof import("../config/sap.ts") | null = null;
+function getSap() {
+  if (!_sap) _sap = require_("../config/sap.ts");
+  return _sap;
+}
+
+let _maritalk: typeof import("../config/maritalk.ts") | null = null;
+function getMaritalk() {
+  if (!_maritalk) _maritalk = require_("../config/maritalk.ts");
+  return _maritalk;
+}
+
+let _kimiToolNames: typeof import("./kimiToolNames.ts") | null = null;
+function getKimiToolNames() {
+  if (!_kimiToolNames) _kimiToolNames = require_("./kimiToolNames.ts");
+  return _kimiToolNames;
+}
+
+let _clineAuth: typeof import("@/shared/utils/clineAuth") | null = null;
+function getClineAuth() {
+  if (!_clineAuth) _clineAuth = require_("@/shared/utils/clineAuth");
+  return _clineAuth;
+}
+
+let _opencodeHeaders: typeof import("../utils/opencodeHeaders.ts") | null = null;
+function getOpencodeHeaders() {
+  if (!_opencodeHeaders) _opencodeHeaders = require_("../utils/opencodeHeaders.ts");
+  return _opencodeHeaders;
+}
+
+let _zaiFormatOverride: typeof import("./default/zaiFormatOverride.ts") | null = null;
+function getZaiFormatOverride() {
+  if (!_zaiFormatOverride) _zaiFormatOverride = require_("./default/zaiFormatOverride.ts");
+  return _zaiFormatOverride;
+}
+
+let _nvidiaConcurrencyGate: typeof import("./default/nvidiaConcurrencyGate.ts") | null = null;
+function getNvidiaConcurrencyGate() {
+  if (!_nvidiaConcurrencyGate)
+    _nvidiaConcurrencyGate = require_("./default/nvidiaConcurrencyGate.ts");
+  return _nvidiaConcurrencyGate;
+}
+
+let _alibabaProviderRegions: typeof import("@/shared/constants/alibabaProviderRegions") | null =
+  null;
+function getAlibabaProviderRegions() {
+  if (!_alibabaProviderRegions)
+    _alibabaProviderRegions = require_("@/shared/constants/alibabaProviderRegions");
+  return _alibabaProviderRegions;
+}
+
+let _requestDefaults: typeof import("@/lib/providers/requestDefaults") | null = null;
+function getRequestDefaults() {
+  if (!_requestDefaults) _requestDefaults = require_("@/lib/providers/requestDefaults");
+  return _requestDefaults;
+}
+
+let _ccWireImageBuiltins: typeof import("../services/ccWireImageBuiltins.ts") | null = null;
+function getCcWireImageBuiltins() {
+  if (!_ccWireImageBuiltins) _ccWireImageBuiltins = require_("../services/ccWireImageBuiltins.ts");
+  return _ccWireImageBuiltins;
+}
+
+let _reasoningEffort: typeof import("./base/reasoningEffort.ts") | null = null;
+function getReasoningEffort() {
+  if (!_reasoningEffort) _reasoningEffort = require_("./base/reasoningEffort.ts");
+  return _reasoningEffort;
+}
+
+// Stubs for deleted poe provider registry — kept so the "poe" case branch
+// below compiles without importing the removed module.
+function isPoeMessagesEligibleModel(_model: string): boolean {
+  return false;
+}
+function resolvePoeUpstreamUrl(_opts: {
+  protocol: "chat" | "responses" | "messages";
+  configuredBaseUrl: string | null;
+  responsesBaseUrl?: string;
+  messagesUrl?: string;
+  defaultChatUrl: string;
+}): string {
+  return _opts.defaultChatUrl;
+}
 
 const NVIDIA_TOOL_CALL_ID_PATTERN = /^[A-Za-z0-9]{9}$/;
 
@@ -214,7 +292,7 @@ export class DefaultExecutor extends BaseExecutor {
         return chatUrl;
       }
       case "bailian-coding-plan": {
-        const baseUrl = resolveAlibabaProviderBaseUrl(
+        const baseUrl = getAlibabaProviderRegions().resolveAlibabaProviderBaseUrl(
           this.provider,
           credentials?.providerSpecificData,
           this.config.baseUrl
@@ -225,7 +303,7 @@ export class DefaultExecutor extends BaseExecutor {
       case "alibaba-cn":
       case "qwen-cloud":
       case "qwen-cloud-token-plan": {
-        const baseUrl = resolveAlibabaProviderBaseUrl(
+        const baseUrl = getAlibabaProviderRegions().resolveAlibabaProviderBaseUrl(
           this.provider,
           credentials?.providerSpecificData,
           this.config.baseUrl
@@ -292,7 +370,7 @@ export class DefaultExecutor extends BaseExecutor {
       }
       case "maritalk": {
         const baseUrl = this.resolveBaseUrl(credentials);
-        return buildMaritalkChatUrl(baseUrl);
+        return getMaritalk().buildMaritalkChatUrl(baseUrl);
       }
       case "siliconflow": {
         const baseUrl = this.resolveBaseUrl(credentials);
@@ -323,7 +401,7 @@ export class DefaultExecutor extends BaseExecutor {
       case "zai":
       case "glm-coding-apikey":
         // #7364: format override extracted to zaiFormatOverride.ts (file-size ratchet).
-        return resolveZaiUrl(credentials, (fallback) => this.resolveBaseUrl(credentials, fallback));
+        return getZaiFormatOverride().resolveZaiUrl(credentials, (fallback) => this.resolveBaseUrl(credentials, fallback));
       case "poe": {
         // #8969: Poe API-key surfaces — Chat Completions, Responses, and
         // Claude-only Messages. Prefer the responses marker from
@@ -444,7 +522,7 @@ export class DefaultExecutor extends BaseExecutor {
         if (bearerToken) {
           headers["Authorization"] = `Bearer ${bearerToken}`;
         }
-        headers["AI-Resource-Group"] = getSapResourceGroup(credentials?.providerSpecificData);
+        headers["AI-Resource-Group"] = getSap().getSapResourceGroup(credentials?.providerSpecificData);
         break;
       }
       case "reka": {
@@ -495,17 +573,17 @@ export class DefaultExecutor extends BaseExecutor {
         headers["x-api-key"] = effectiveKey || credentials.accessToken;
         break;
       case "clinepass": // dual-auth (OAuth or BYOK) — see applyClineAuthHeaders()
-        applyClineAuthHeaders(headers, credentials, effectiveKey, clientHeaders, true);
+        getClineAuth().applyClineAuthHeaders(headers, credentials, effectiveKey, clientHeaders, true);
         break;
       case "cline":
         // Cline's API requires the bearer token prefixed with `workos:` plus a
         // set of Cline client-identification headers; plain `Bearer <token>`
         // is rejected upstream. applyClineAuthHeaders() emits both.
-        applyClineAuthHeaders(headers, credentials, effectiveKey, clientHeaders, false);
+        getClineAuth().applyClineAuthHeaders(headers, credentials, effectiveKey, clientHeaders, false);
         break;
       default:
         if (this.usesClaudeCodeProtocol(credentials)) {
-          const ccRequestDefaults = getClaudeCodeCompatibleRequestDefaults(
+          const ccRequestDefaults = getRequestDefaults().getClaudeCodeCompatibleRequestDefaults(
             credentials?.providerSpecificData
           );
           const ccHeaders = buildClaudeCodeCompatibleHeaders(
@@ -514,7 +592,7 @@ export class DefaultExecutor extends BaseExecutor {
             credentials?.providerSpecificData?.ccSessionId,
             { redactThinking: ccRequestDefaults.redactThinking === true }
           );
-          if (usesCcWireImage(this.provider)) {
+          if (getCcWireImageBuiltins().usesCcWireImage(this.provider)) {
             delete ccHeaders["Authorization"];
             ccHeaders["x-api-key"] = effectiveKey || credentials.accessToken || "";
           }
@@ -586,7 +664,7 @@ export class DefaultExecutor extends BaseExecutor {
     // Forward client request metadata headers (from OpenCode or similar clients)
     // Allowlist-based: only specific x-opencode-* headers and User-Agent are forwarded
     if (clientHeaders) {
-      forwardOpencodeClientHeaders(headers, clientHeaders);
+      getOpencodeHeaders().forwardOpencodeClientHeaders(headers, clientHeaders);
 
       // #3974: merge the client's negotiated anthropic-beta (allowlisted) into the
       // outbound set. The registry's static ANTHROPIC_BETA_CLAUDE_OAUTH lacks
@@ -681,7 +759,7 @@ export class DefaultExecutor extends BaseExecutor {
       !Array.isArray(withDefaults) &&
       Array.isArray((withDefaults as Record<string, unknown>).messages)
     ) {
-      withDefaults = ensureToolMessageNames(withDefaults as Record<string, unknown>);
+      withDefaults = getKimiToolNames().ensureToolMessageNames(withDefaults as Record<string, unknown>);
     }
 
     withDefaults = this.applyJsonSchemaFallback(withDefaults);
@@ -830,7 +908,7 @@ export class DefaultExecutor extends BaseExecutor {
     if (typeof withDefaults === "object" && withDefaults !== null) {
       const bodyRecord = withDefaults as Record<string, unknown>;
       const outboundModel = typeof bodyRecord.model === "string" ? bodyRecord.model : model;
-      withDefaults = mapNvidiaGlm52ReasoningParams(bodyRecord, this.provider, outboundModel);
+      withDefaults = getReasoningEffort().mapNvidiaGlm52ReasoningParams(bodyRecord, this.provider, outboundModel);
       stripUnsupportedParams(this.provider, outboundModel, withDefaults as Record<string, unknown>);
     }
 
@@ -956,7 +1034,7 @@ export class DefaultExecutor extends BaseExecutor {
     if (this.provider === "gigachat") {
       if (!credentials.apiKey) return null;
       try {
-        return await getGigachatAccessToken({
+        return await getGigachatAuth().getGigachatAccessToken({
           credentials: credentials.apiKey,
         });
       } catch (error) {
@@ -984,7 +1062,7 @@ export class DefaultExecutor extends BaseExecutor {
   async execute(input: ExecuteInput) {
     // #6846 Phase 1: per-connection concurrency cap for nvidia — no-op for every
     // other provider (returns null immediately, no semaphore key allocated).
-    const releaseNvidiaSlot = await acquireNvidiaConcurrencySlot(
+    const releaseNvidiaSlot = await getNvidiaConcurrencyGate().acquireNvidiaConcurrencySlot(
       this.provider,
       input.credentials?.connectionId
     );

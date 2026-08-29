@@ -8,7 +8,15 @@
 import crypto from "crypto";
 import { v5 as uuidv5 } from "uuid";
 import { getCursorUserAgent } from "../config/providerHeaderProfiles.ts";
-import { getCursorVersion } from "./cursorVersionDetector.ts";
+
+/**
+ * Cursor IDE version — previously auto-detected from the local SQLite DB.
+ * Browser-based detection removed for thin API gateway; hardcoded fallback.
+ */
+const CURSOR_VERSION = "3.9";
+function getCursorVersion(): string {
+  return CURSOR_VERSION;
+}
 
 /**
  * Generate SHA-256 hash like generateHashed64Hex

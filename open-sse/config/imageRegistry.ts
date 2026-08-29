@@ -6,16 +6,12 @@
  */
 
 import { LMARENA_DIRECT_IMAGE_MODELS } from "./providers/registry/lmarena/directModels.ts";
-import { SEGMIND_IMAGE_PROVIDER } from "./providers/registry/segmind/imageModels.ts";
-import { KIE_IMAGE_MODELS } from "./providers/registry/kie/imageModels.ts";
-import { FREEPIK_IMAGE_PROVIDER } from "./providers/registry/freepik/index.ts";
-import { STABILITY_AI_IMAGE_MODELS } from "./providers/registry/stability-ai/imageModels.ts";
-import { GEMINI_IMAGEN_PROVIDER } from "./providers/registry/gemini/imageModels.ts";
-import { CHEAPERINFERENCE_IMAGE_PROVIDER } from "./providers/registry/cheaperinference/imageModels.ts";
-import {
-  ADOBE_FIREFLY_IMAGE_ROUTING_ALIASES,
-  toRegistryImageModels,
-} from "../services/adobeFireflyModels.ts";
+
+// adobeFireflyModels.ts removed for thin API gateway; inline empty stubs.
+const ADOBE_FIREFLY_IMAGE_ROUTING_ALIASES: readonly string[] = [];
+function toRegistryImageModels(): Array<Record<string, unknown>> {
+  return [];
+}
 
 interface ImageModelEntry {
   id: string;
@@ -65,6 +61,47 @@ interface ImageCatalogModelEntry {
   description?: string;
   mediaCapabilities?: Record<string, unknown>;
 }
+
+// Stubs for deleted provider registries — empty so the provider entries below
+// compile without importing the removed modules.
+const SEGMIND_IMAGE_PROVIDER: ImageProviderConfig = {
+  id: "segmind",
+  baseUrl: "https://api.segmind.com/v1",
+  authType: "apikey",
+  authHeader: "x-api-key",
+  format: "segmind",
+  models: [],
+  supportedSizes: [],
+};
+const KIE_IMAGE_MODELS: ImageModelEntry[] = [];
+const FREEPIK_IMAGE_PROVIDER: ImageProviderConfig = {
+  id: "freepik",
+  baseUrl: "https://api.freepik.com/v1",
+  authType: "apikey",
+  authHeader: "bearer",
+  format: "freepik",
+  models: [],
+  supportedSizes: [],
+};
+const STABILITY_AI_IMAGE_MODELS: ImageModelEntry[] = [];
+const GEMINI_IMAGEN_PROVIDER: ImageProviderConfig = {
+  id: "gemini",
+  baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+  authType: "apikey",
+  authHeader: "bearer",
+  format: "gemini-image",
+  models: [],
+  supportedSizes: [],
+};
+const CHEAPERINFERENCE_IMAGE_PROVIDER: ImageProviderConfig = {
+  id: "cheaperinference",
+  baseUrl: "",
+  authType: "apikey",
+  authHeader: "bearer",
+  format: "cheaperinference",
+  models: [],
+  supportedSizes: [],
+};
 
 const IMAGE_MODEL_ALIASES: Record<string, ImageModelAliasEntry> = {
   "gemini-3.1-flash-image-preview": {

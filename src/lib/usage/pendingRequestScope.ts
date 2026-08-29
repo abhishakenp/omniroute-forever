@@ -1,10 +1,7 @@
-import {
-  finalizePendingRequest,
-  finalizePendingRequestById,
-  updatePendingRequest,
-  updatePendingRequestById,
-  type PendingRequestMetadata,
-} from "./usageHistory";
+// Thin gateway — pending request scope tracking removed. All functions are no-ops.
+// Previously imported from ./usageHistory which pulls in migrations → yazl + piiSanitizer.
+
+export type PendingRequestMetadata = Record<string, unknown>;
 
 export type PendingRequestScope = {
   id: string | null | undefined;
@@ -13,14 +10,6 @@ export type PendingRequestScope = {
   connectionId: string | null;
 };
 
-export function updatePendingScope(scope: PendingRequestScope, metadata: PendingRequestMetadata) {
-  if (!updatePendingRequestById(scope.id || null, metadata)) {
-    updatePendingRequest(scope.model, scope.provider, scope.connectionId, metadata);
-  }
-}
+export function updatePendingScope(_scope: PendingRequestScope, _metadata: PendingRequestMetadata) {}
 
-export function finalizePendingScope(scope: PendingRequestScope, metadata: PendingRequestMetadata) {
-  if (!finalizePendingRequestById(scope.id, metadata)) {
-    finalizePendingRequest(scope.model, scope.provider, scope.connectionId, metadata);
-  }
-}
+export function finalizePendingScope(_scope: PendingRequestScope, _metadata: PendingRequestMetadata) {}

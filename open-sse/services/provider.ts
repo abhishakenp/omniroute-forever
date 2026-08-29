@@ -1,15 +1,18 @@
 // @ts-nocheck
+import { createRequire } from "node:module";
 import { PROVIDERS } from "../config/constants.ts";
 import { getRegistryEntry } from "../config/providerRegistry.ts";
 import { resolveAlternateFormat } from "../config/providers/alternateFormats.ts";
-import {
-  buildClaudeCodeCompatibleHeaders,
-  CLAUDE_CODE_COMPATIBLE_DEFAULT_CHAT_PATH,
-  joinClaudeCodeCompatibleUrl,
-} from "./claudeCodeCompatible.ts";
 import { getClaudeCodeCompatibleRequestDefaults } from "@/lib/providers/requestDefaults";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
 import { usesCcWireImage } from "./ccWireImageBuiltins.ts";
+
+const require_ = createRequire(import.meta.url);
+let _claudeCodeCompatible: typeof import("./claudeCodeCompatible.ts") | null = null;
+function getClaudeCodeCompatible() {
+  if (!_claudeCodeCompatible) _claudeCodeCompatible = require_("./claudeCodeCompatible.ts");
+  return _claudeCodeCompatible;
+}
 
 const OPENAI_COMPATIBLE_PREFIX = "openai-compatible-";
 const OPENAI_COMPATIBLE_DEFAULTS = {
@@ -286,7 +289,8 @@ export function buildProviderUrl(
     const entry = getRegistryEntry(provider);
     const config = getProviderConfig(provider);
     const baseUrl = options?.baseUrl || entry?.baseUrl || config.baseUrl;
-    return joinClaudeCodeCompatibleUrl(baseUrl, CLAUDE_CODE_COMPATIBLE_DEFAULT_CHAT_PATH);
+    const cc = getClaudeCodeCompatible();
+    return cc.joinClaudeCodeCompatibleUrl(baseUrl, cc.CLAUDE_CODE_COMPATIBLE_DEFAULT_CHAT_PATH);
   }
   if (isOpenAICompatible(provider)) {
     const providerSpecificData = options?.providerSpecificData || null;
@@ -300,7 +304,8 @@ export function buildProviderUrl(
   if (isAnthropicCompatible(provider)) {
     const baseUrl = options?.baseUrl || ANTHROPIC_COMPATIBLE_DEFAULTS.baseUrl;
     if (isClaudeCodeCompatible(provider)) {
-      return joinClaudeCodeCompatibleUrl(baseUrl, CLAUDE_CODE_COMPATIBLE_DEFAULT_CHAT_PATH);
+      const cc = getClaudeCodeCompatible();
+      return cc.joinClaudeCodeCompatibleUrl(baseUrl, cc.CLAUDE_CODE_COMPATIBLE_DEFAULT_CHAT_PATH);
     }
     return buildAnthropicCompatibleUrl(baseUrl);
   }
@@ -350,7 +355,7 @@ export function buildProviderHeaders(provider, credentials, stream = true, body 
     const ccRequestDefaults = getClaudeCodeCompatibleRequestDefaults(
       credentials?.providerSpecificData
     );
-    const ccHeaders = buildClaudeCodeCompatibleHeaders(
+    const ccHeaders = getClaudeCodeCompatible().buildClaudeCodeCompatibleHeaders(
       token,
       stream,
       credentials?.providerSpecificData?.ccSessionId,

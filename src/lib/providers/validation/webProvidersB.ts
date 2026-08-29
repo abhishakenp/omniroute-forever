@@ -299,7 +299,15 @@ export async function validateCopilotWebProvider({ apiKey, providerSpecificData 
     }
 
     // Extract token — may be bare JWT, cookie string with access_token=, or Bearer prefix
-    const { extractAccessToken } = await import("@omniroute/open-sse/executors/copilot-web.ts");
+    // copilot-web.ts executor removed for thin API gateway; inline simple extraction.
+    const extractAccessToken = (input: string): string | null => {
+      if (!input) return null;
+      const match = input.match(/access_token=([^;]+)/);
+      if (match) return match[1];
+      const bearerMatch = input.match(/Bearer\s+(.+)/);
+      if (bearerMatch) return bearerMatch[1].trim();
+      return input.trim() || null;
+    };
     const token = extractAccessToken(raw);
     if (!token) {
       return { valid: false, error: "Could not extract access_token from input" };

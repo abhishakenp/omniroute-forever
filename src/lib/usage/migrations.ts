@@ -57,7 +57,7 @@ function buildLegacyRequestSummary(requestType: unknown, requestBody: unknown) {
   const record = requestBody as Record<string, unknown>;
   const summary: Record<string, unknown> = {};
   if (typeof record.query === "string" && record.query.trim().length > 0) {
-    summary.query = sanitizePII(record.query).text;
+    summary.query = sanitizePII(record.query);
   }
 
   const filters = Object.fromEntries(

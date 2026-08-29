@@ -1,6 +1,7 @@
-import { isRetiredGitHubCopilotModelId } from "@omniroute/open-sse/config/providers/registry/github/retiredModels.ts";
-
 import { asRecord, toNonEmptyString } from "./shared";
+
+// Stub for deleted github provider registry — no models are retired.
+const isRetiredGitHubCopilotModelId = (_provider?: string, _modelId?: string): boolean => false;
 
 export interface SyncedAvailableModel {
   id: string;

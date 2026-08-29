@@ -1,38 +1,24 @@
-/**
- * usageDb.js — Facade (T-15 decomposition)
- *
- * This file is now a thin re-export layer. All logic has been
- * extracted into focused modules under `./usage/`:
- *
- *   migrations.js     — Legacy file + JSON→SQLite migration
- *   usageHistory.js   — Usage tracking, request log, pending requests
- *   costCalculator.js — Cost calculation (pure function)
- *   usageStats.js     — Aggregated stats for dashboard
- *   callLogs.js       — Structured call log management
- *
- * Existing imports like `import { getUsageStats } from "@/lib/usageDb"`
- * continue to work unchanged.
- */
+// Thin gateway — usage tracking removed. All functions are no-ops.
+export const trackPendingRequest = () => {};
+export const updatePendingRequest = () => {};
+export const updatePendingRequestStreamChunks = () => {};
+export const finalizePendingRequest = () => {};
+export const getUsageDb = () => null;
+export const saveRequestUsage = () => Promise.resolve();
+export const getUsageHistory = () => [];
+export const getModelLatencyStats = () => [];
+export const appendRequestLog = () => Promise.resolve();
+export const getRecentLogs = () => [];
+export const calculateCost = () => 0;
+export const getUsageStats = () => ({});
+export const saveCallLog = () => Promise.resolve();
+export const rotateCallLogs = () => {};
+export const getCallLogs = () => [];
+export const getCallLogById = () => null;
 
-// Trigger migrations on module load (side-effect)
-import "./usage/migrations";
-
-// Re-export everything for backward compatibility
-export {
-  trackPendingRequest,
-  updatePendingRequest,
-  updatePendingRequestStreamChunks,
-  finalizePendingRequest,
-  getUsageDb,
-  saveRequestUsage,
-  getUsageHistory,
-  getModelLatencyStats,
-  appendRequestLog,
-  getRecentLogs,
-} from "./usage/usageHistory";
-
-export { calculateCost } from "./usage/costCalculator";
-
-export { getUsageStats } from "./usage/usageStats";
-
-export { saveCallLog, rotateCallLogs, getCallLogs, getCallLogById } from "./usage/callLogs";
+// Additional no-ops for chat-path callers that previously imported directly
+// from ./usage/usageHistory (which pulls in migrations → yazl + piiSanitizer).
+export const finalizePendingRequestById = () => false;
+export const finalizeMostRecentPendingRequest = () => {};
+export const updatePendingRequestById = () => false;
+export const getPendingById = () => new Map<string, unknown>();

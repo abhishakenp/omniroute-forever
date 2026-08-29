@@ -20,7 +20,6 @@ import {
 import { getTaskFitness } from "./taskFitness";
 import { getModePack } from "./modePacks";
 import { getSelfHealingManager } from "./selfHealing";
-import { classifyPromptIntent } from "../intentClassifier";
 
 export interface AutoComboConfig {
   id: string;
@@ -240,8 +239,8 @@ export function selectProvider(
                 .join(" ")
             : "";
       if (text.length > 10) {
-        const intent = classifyPromptIntent(text);
-        effectiveTaskType = intent; // 'code' | 'reasoning' | 'simple' | 'medium'
+        // Intent classification removed for thin gateway — default to "simple".
+        effectiveTaskType = "simple";
       }
     }
   }

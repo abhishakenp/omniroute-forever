@@ -4,8 +4,6 @@
  * models/; this file re-exports their public APIs for backward compatibility.
  */
 
-import { isRetiredGitHubCopilotModelId } from "@omniroute/open-sse/config/providers/registry/github/retiredModels.ts";
-
 import { getDbInstance } from "./core";
 import { backupDbFile } from "./backup";
 import { getProviderConnectionsCount } from "./providers";
@@ -28,6 +26,9 @@ import {
   type ModelCompatOverride,
   type ModelCompatPerProtocol,
 } from "./models/compat";
+
+// Stub for deleted github provider registry — no models are retired.
+const isRetiredGitHubCopilotModelId = (_provider?: string, _modelId?: string): boolean => false;
 
 export {
   sanitizeUpstreamHeadersMap,

@@ -43,17 +43,12 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
       return text;
     }
     if (isSnapshot) {
-      return sanitizePII(text).text;
+      return sanitizePII(text);
     }
     const buffers = getBuffers(index);
     buffers[field] += text;
-    const { text: sanitized, endMatchIndex } = sanitizePII(buffers[field], !isStopSignal);
+    const sanitized = sanitizePII(buffers[field]);
     let emitLength = isStopSignal ? sanitized.length : Math.max(0, sanitized.length - W);
-
-    // Cap emitLength at the start of any PII that touched the end of the buffer
-    if (!isStopSignal && endMatchIndex !== undefined && emitLength > endMatchIndex) {
-      emitLength = endMatchIndex;
-    }
 
     // Prevent slicing in the middle of a UTF-16 surrogate pair (e.g. emojis)
     if (emitLength > 0 && emitLength < sanitized.length) {
@@ -75,7 +70,7 @@ export function createPiiSseTransform(options?: PiiTransformOptions): TransformS
       for (const key of Object.keys(buffers)) {
         const field = key as FieldCategory;
         if (buffers[field]) {
-          buffers[field] = sanitizePII(buffers[field]).text;
+          buffers[field] = sanitizePII(buffers[field]);
         }
       }
     }

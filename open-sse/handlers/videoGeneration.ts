@@ -17,7 +17,6 @@ import { handleDashscopeVideoGeneration } from "./videoGeneration/dashscopeHandl
 import { handleNovitaVideoGeneration } from "./videoGeneration/novitaHandler.ts";
 import { handleXaiVideoGeneration } from "./videoGeneration/xaiGrokImagineHandler.ts";
 import { handleSegmindVideoGeneration } from "./videoGeneration/providers/segmind.ts";
-import { handleAdobeFireflyVideoGeneration } from "./videoGeneration/adobeFireflyHandler.ts";
 import { handleOpenAIVideoGeneration } from "./videoGeneration/openai.ts";
 import { getVideoJobPreset, handleVideoJobGeneration } from "./videoGeneration/job.ts";
 import {
@@ -288,14 +287,11 @@ export async function handleVideoGeneration({ body, credentials, log, resolvedPr
     return handleXaiVideoGeneration({ model, provider, providerConfig, body, credentials, log });
   }
   if (providerConfig.format === "adobe-firefly-video") {
-    return handleAdobeFireflyVideoGeneration({
-      model,
-      provider,
-      providerConfig,
-      body,
-      credentials,
-      log,
-    });
+    return {
+      success: false,
+      status: 503,
+      error: "adobe-firefly video generation is not available (browser executor removed)",
+    };
   }
   if (resolvedProvider) {
     // Custom provider with no matching built-in format — use OpenAI-compatible fallback

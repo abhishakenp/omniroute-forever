@@ -236,7 +236,6 @@
     "test:unit:serial": "cross-env DISABLE_SQLITE_AUTO_BACKUP=true node --max-old-space-size=4096 --import tsx/esm --import ./open-sse/utils/setupPolyfill.ts --import ./tests/_setup/isolateDataDir.ts --test --test-force-exit --test-concurrency=1 \"tests/unit/serial/**/*.test.ts\""
   },
   "dependencies": {
-    "@aws-sdk/client-bedrock-runtime": "^3.1073.0",
     "@sinclair/typebox": "^0.34.52",
     "@swc/helpers": "0.5.23",
     "bcryptjs": "^3.0.3",
@@ -258,10 +257,8 @@
     "pino": "^10.3.1",
     "pino-abstract-transport": "^3.0.0",
     "pino-pretty": "^13.1.3",
-    "playwright": "1.62.0",
     "safe-regex": "^2.1.1",
     "selfsigned": "^5.5.0",
-    "sharp": "^0.35.3",
     "smol-toml": "1.7.1",
     "socks": "^2.8.7",
     "undici": "^8.3.0",
@@ -272,7 +269,6 @@
     "zod": "^4.4.3"
   },
   "optionalDependencies": {
-    "better-sqlite3": "^13.0.1",
     "keytar": "^7.9.0"
   },
   "devDependencies": {
@@ -285,7 +281,6 @@
     "@tailwindcss/postcss": "^4.3.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/bun": "latest",
     "@types/node": "^26.1.0",
     "@types/react": "^19.2.15",
@@ -340,10 +335,8 @@
     "onlyBuiltDependencies": [
       "@parcel/watcher",
       "@swc/core",
-      "better-sqlite3",
       "esbuild",
-      "omniroute",
-      "sharp"
+      "omniroute"
     ]
   },
   "overrides": {
@@ -413,7 +406,6 @@
   "allowScripts": {
     "sharp@0.35.3": true,
     "sharp@0.34.5": true,
-    "better-sqlite3@13.0.1": true,
     "esbuild@0.28.1": true,
     "core-js@3.29.1": true,
     "keytar@7.9.0": true

@@ -53,7 +53,6 @@ import {
   getLastSessionModel,
   getHandoff,
 } from "../../src/lib/db/contextHandoffs.ts";
-import { extractSessionAffinityKey } from "@/sse/services/auth";
 import { getHiddenModelsByProvider } from "@/models";
 import { resolveModelLockoutSettings } from "../../src/lib/resilience/modelLockoutSettings";
 import { fetchCodexQuota } from "./codexQuotaFetcher.ts";
@@ -67,26 +66,10 @@ import { checkCredentialGate, logCredentialSkip } from "./credentialGate.ts";
 import { emit } from "../../src/lib/events/eventBus";
 import { notifyWebhookEvent } from "../../src/lib/webhookDispatcher";
 import { type ProviderCandidate } from "./autoCombo/scoring.ts";
-import { estimateTokens } from "./contextManager.ts";
 import { getSessionConnection } from "./sessionManager.ts";
-import {
-  applySessionStickiness,
-  normalizeStickinessMessages,
-  recordStickyBinding,
-  clearStickyBinding,
-  peekStickyConnectionId,
-  resolveDisableSessionStickiness,
-} from "./combo/sessionStickiness.ts";
 import { selectQuotaShareTarget } from "./combo/quotaShareStrategy.ts";
 import { makeConnectionConcurrencyResolver, lookupPositiveCap } from "./combo/concurrencyCaps.ts";
 import { acquireQuotaShareConcurrencySlot } from "./combo/quotaShareConcurrency.ts";
-import { orderTargetsByEvalScores } from "./evalRouting.ts";
-import {
-  applyPromptCacheAffinity,
-  expandPromptCacheAffinityTargets,
-  expandPromptCacheAffinityTargetsFromConnections,
-  resolvePromptCacheAffinityKey,
-} from "./combo/promptCacheAffinity.ts";
 import { getCachedProviderConnections } from "../../src/lib/db/readCache";
 import {
   isProviderInCooldown,
@@ -116,11 +99,8 @@ import {
   rrCounters,
   rrStickyTargets,
   clampStickyRoundRobinTargetLimit,
-  clampStickyWeightedTargetLimit,
   getStickyRoundRobinStartIndex,
   recordStickyRoundRobinSuccess,
-  getStickyWeightedExecutionKey,
-  recordStickyWeightedSuccess,
   resolveComboStickyRoundRobinLimit,
 } from "./combo/rrState.ts";
 import {
@@ -178,7 +158,6 @@ export {
 import { applyComboTargetExhaustion } from "./combo/targetExhaustion.ts";
 import {
   pinIsDurablyUnhealthy,
-  tryFusionDispatch,
   tryPinnedModelDispatch,
   tryPipelineDispatch,
   tryRuntimeUnitDispatch,
@@ -354,6 +333,12 @@ const DETERMINISTIC_PARAM_PATTERNS = [
   /invalid model/i,
   /model.*does not exist/i,
   /model.*not.*supported/i,
+  // Subscription-tier denial — model-level, not account-level: every free-tier
+  // key gets the same 403 "not available in your subscription tier". Without this,
+  // the combo burns all 173 accounts one-by-one for a model the free tier can't access.
+  /not.*available.*subscription.*tier/i,
+  /not.*available.*in.*your.*subscription/i,
+  /subscription.*tier.*not.*available/i,
 ];
 function isDeterministicParamFailure(errorText: string | null | undefined): boolean {
   if (!errorText) return false;
@@ -361,12 +346,10 @@ function isDeterministicParamFailure(errorText: string | null | undefined): bool
 }
 
 export function releaseStickyPinOnFailure(
-  messageHash: string | null | undefined,
-  failedConnectionId: string | null | undefined
+  _messageHash: string | null | undefined,
+  _failedConnectionId: string | null | undefined
 ): void {
-  if (!messageHash || !failedConnectionId) return;
-  if (peekStickyConnectionId(messageHash) !== failedConnectionId) return;
-  clearStickyBinding(messageHash);
+  // Sticky sessions removed — no-op stub for backward-compatible call sites.
 }
 
 const DEFAULT_MODEL_P95_MS: Record<string, number> = {
@@ -412,19 +395,7 @@ export async function buildAutoCandidates(
   // apply, so auto-routing behavior is unchanged.
   const quotaCutoffEnabled =
     (resilienceSettings ?? resolveResilienceSettings(null))?.quotaPreflight?.enabled === true;
-  const { getPricingForModel } = await import("../../src/lib/localDb");
-  const quotaPromises = new Map<string, Promise<unknown>>();
-  let historicalLatencyStats: Record<string, HistoricalLatencyStatsEntry> = {};
-  try {
-    const { getModelLatencyStats } = await import("../../src/lib/usageDb");
-    historicalLatencyStats = await getModelLatencyStats({
-      windowHours: 24,
-      minSamples: 3,
-      maxRows: 10000,
-    });
-  } catch {
-    // keep empty stats — auto-combo will use runtime + bootstrap signals
-  }
+  // Thin gateway: no pricing lookups, no historical latency stats, no quota fetches.
 
   const uniqueProviders = Array.from(
     new Set(
@@ -432,39 +403,32 @@ export async function buildAutoCandidates(
     )
   );
   const connectionPoolCounts = new Map<string, number>();
-  const connectionsByProvider = new Map<string, Array<Record<string, unknown>>>();
   const connectionById = new Map<string, Record<string, unknown>>();
-  await Promise.all(
-    uniqueProviders.map(async (provider) => {
-      try {
-        const connections = (await getCachedProviderConnections({
-          provider,
-          isActive: true,
-        })) as Array<Record<string, unknown>>;
-        const active = Array.isArray(connections) ? connections : [];
-        connectionPoolCounts.set(provider, active.length);
-        connectionsByProvider.set(provider, active);
-        for (const connection of active) {
-          if (connection && typeof connection === "object" && typeof connection.id === "string") {
-            connectionById.set(connection.id, connection as Record<string, unknown>);
-          }
+  // Thin gateway: load connections sequentially per-provider (cache hits are fast).
+  // Don't retain the full connectionsByProvider array — only connectionById for
+  // fingerprint expansion and connectionPoolCounts for candidate pool size.
+  for (const provider of uniqueProviders) {
+    try {
+      const connections = (await getCachedProviderConnections({
+        provider,
+        isActive: true,
+      })) as Array<Record<string, unknown>>;
+      const active = Array.isArray(connections) ? connections : [];
+      connectionPoolCounts.set(provider, active.length);
+      for (const connection of active) {
+        if (connection && typeof connection === "object" && typeof connection.id === "string") {
+          connectionById.set(connection.id, connection as Record<string, unknown>);
         }
-      } catch {
-        connectionPoolCounts.set(provider, 0);
-        connectionsByProvider.set(provider, []);
       }
-    })
-  );
-
-  const expandedTargets = expandPromptCacheAffinityTargetsFromConnections(
-    targets,
-    connectionsByProvider
-  );
+    } catch {
+      connectionPoolCounts.set(provider, 0);
+    }
+  }
 
   // #5521: Expand fingerprint-based providers (mimocode, mcode, opencode) so each
   // fingerprint gets its own combo slot instead of being bundled into one connection.
   const fingerprintExpandedTargets = expandTargetsByFingerprints(
-    expandedTargets,
+    targets,
     connectionById,
     (t) => {
       const parsed = parseModel(t.modelStr);
@@ -472,165 +436,59 @@ export async function buildAutoCandidates(
     }
   );
 
-  const candidates = await Promise.all(
-    fingerprintExpandedTargets.map(async (target) => {
-      const modelStr = target.modelStr;
-      const parsed = parseModel(modelStr);
-      const provider = target.provider || parsed.provider || parsed.providerAlias || "unknown";
-      const model = parsed.model || modelStr;
-      const historicalKey = `${provider}/${model}`;
-      const historicalModelMetric = historicalLatencyStats[historicalKey] || null;
-      const historicalTotal = Number(historicalModelMetric?.totalRequests);
-      const hasHistoricalSignal =
-        Number.isFinite(historicalTotal) && historicalTotal >= MIN_HISTORY_SAMPLES;
-
-      let costPer1MTokens = 1;
-      try {
-        const pricing = await getPricingForModel(provider, model);
-        const inputPrice = Number(pricing?.input);
-        const outputPrice = Number(pricing?.output);
-        if (Number.isFinite(inputPrice) && inputPrice >= 0) {
-          if (Number.isFinite(outputPrice) && outputPrice >= 0) {
-            costPer1MTokens =
-              inputPrice * (1 - OUTPUT_TOKEN_RATIO) + outputPrice * OUTPUT_TOKEN_RATIO;
-          } else {
-            costPer1MTokens = inputPrice;
-          }
-        }
-      } catch {
-        // keep default cost
-      }
-
-      const modelMetric = metrics?.byModel?.[modelStr] || null;
-      const avgLatency = Number(modelMetric?.avgLatencyMs);
-      const successRate = Number(modelMetric?.successRate);
-      const historicalP95Latency = Number(historicalModelMetric?.p95LatencyMs);
-      const historicalStdDev = Number(historicalModelMetric?.latencyStdDev);
-      const historicalSuccessRate = Number(historicalModelMetric?.successRate); // 0..1
-
-      const p95LatencyMs = hasHistoricalSignal
-        ? Number.isFinite(historicalP95Latency) && historicalP95Latency > 0
-          ? historicalP95Latency
-          : getBootstrapLatencyMs(model)
-        : Number.isFinite(avgLatency) && avgLatency > 0
-          ? avgLatency
-          : getBootstrapLatencyMs(model);
-
-      const errorRate = hasHistoricalSignal
-        ? Number.isFinite(historicalSuccessRate) &&
-          historicalSuccessRate >= 0 &&
-          historicalSuccessRate <= 1
-          ? 1 - historicalSuccessRate
-          : 0.05
-        : Number.isFinite(successRate) && successRate >= 0 && successRate <= 100
-          ? 1 - successRate / 100
-          : 0.05;
-      const latencyStdDev =
-        hasHistoricalSignal && Number.isFinite(historicalStdDev) && historicalStdDev > 0
-          ? Math.max(10, historicalStdDev)
-          : Math.max(10, p95LatencyMs * 0.1);
-      // #6875: surface TTFT/E2E-latency/tokens-per-second onto the candidate so the
-      // existing speed-ranking factor (#6011, speedRanking.ts/routerStrategy.ts) picks
-      // up real telemetry instead of falling back to the pool median. Additive only —
-      // no scoring weights change here.
-      const speedTelemetry = hasHistoricalSignal
-        ? deriveSpeedTelemetry(historicalModelMetric)
-        : undefined;
-
-      const breakerStateRaw = getCircuitBreaker(provider)?.getStatus?.()?.state;
-      const circuitBreakerState: ProviderCandidate["circuitBreakerState"] =
-        breakerStateRaw === "OPEN" || breakerStateRaw === "HALF_OPEN" ? breakerStateRaw : "CLOSED";
-      const contextAffinity = calculateTargetContextAffinity(target, sessionId);
-      let resetWindowAffinity = 0.5;
-      let quotaRemaining = 100;
-      let quotaCutoffBlocked = false;
-      let quotaCutoffReason: string | undefined;
-      const fetcher = getQuotaFetcher(provider);
-      const connection = target.connectionId ? connectionById.get(target.connectionId) : undefined;
-      // Gate the terminal-status cutoff behind the same opt-in as the quota-percent
-      // cutoff (#4483): when quota cutoff is disabled, a connection in a terminal
-      // testStatus must still fall through to normal connection-cooldown / model-lockout
-      // handling instead of being hard-blocked here (which would surface a misleading
-      // "below quota cutoff" 429 when every candidate is transiently unavailable).
-      // The connection's terminal/transient status (credits_exhausted / rate_limited /
-      // banned / expired / future-dated unavailable) is classified unconditionally.
-      const connectionStatusReason = getConnectionStatusQuotaCutoffReason(connection);
-      const statusCutoffReason = quotaCutoffEnabled ? connectionStatusReason : undefined;
-      // #4540: when the HARD cutoff is OFF (default), a status-flagged connection is NOT
-      // hard-blocked (that would surface a misleading "below quota cutoff" 429), but it
-      // also must not score identically to a healthy provider. A no-fetcher exhausted
-      // connection keeps quotaRemaining=100, so we tag a SOFT penalty applied at scoring
-      // time (scoreAutoTargets → STATUS_SOFT_DEPRIORITIZE_FACTOR) instead.
-      let statusPenalty = false;
-      let statusPenaltyReason: string | undefined;
-      if (statusCutoffReason) {
-        quotaCutoffBlocked = true;
-        quotaCutoffReason = statusCutoffReason;
-        quotaRemaining = 0;
-      } else if (connectionStatusReason) {
-        statusPenalty = true;
-        statusPenaltyReason = connectionStatusReason;
-      }
-      if (fetcher && target.connectionId) {
-        const quotaKey = `${provider}:${target.connectionId}`;
-        if (!quotaPromises.has(quotaKey)) {
-          quotaPromises.set(
-            quotaKey,
-            fetchResetAwareQuotaWithCache({
-              provider,
-              connectionId: target.connectionId,
-              connection,
-              fetcher,
-              config: resetWindowConfig,
-              log: {},
-              comboName,
-            })
-          );
-        }
-        const quota = await quotaPromises.get(quotaKey)!;
-        resetWindowAffinity = calculateResetWindowAffinity(quota, resetWindowConfig);
-        if (!quotaCutoffBlocked) {
-          quotaRemaining = quotaRemainingPercentFromQuota(quota);
-        }
-        if (!quotaCutoffBlocked && quotaCutoffEnabled) {
-          const cutoffDecision = evaluateQuotaCutoff(
-            quota as QuotaInfo | null,
-            buildAutoQuotaThresholds(provider, connection, resilienceSettings)
-          );
-          if (!cutoffDecision.proceed) {
-            quotaCutoffBlocked = true;
-            quotaCutoffReason = cutoffDecision.reason || "quota_exhausted";
-          }
-        }
-      }
-
-      return {
-        stepId: target.stepId,
-        executionKey: target.executionKey,
-        modelStr,
-        provider,
-        model,
-        quotaRemaining,
-        quotaTotal: 100,
-        circuitBreakerState,
-        costPer1MTokens,
-        p95LatencyMs,
-        latencyStdDev,
-        errorRate,
-        ...speedTelemetry,
-        accountTier: "standard" as const,
-        quotaResetIntervalSecs: 86400,
-        contextAffinity,
-        resetWindowAffinity,
-        quotaCutoffBlocked,
-        quotaCutoffReason,
-        statusPenalty,
-        statusPenaltyReason,
-        connectionPoolSize: connectionPoolCounts.get(provider) ?? 1,
-        connectionId: target.connectionId ?? undefined,
-      };
-    })
-  );
+  // Thin gateway: build candidates synchronously — no per-target pricing lookups,
+  // no quota fetches, no historical latency stats. Default scores are sufficient
+  // for routing; the combo loop tries targets in order until one succeeds.
+  const candidates = fingerprintExpandedTargets.map((target) => {
+    const modelStr = target.modelStr;
+    const parsed = parseModel(modelStr);
+    const provider = target.provider || parsed.provider || parsed.providerAlias || "unknown";
+    const model = parsed.model || modelStr;
+    const p95LatencyMs = getBootstrapLatencyMs(model);
+    const breakerStateRaw = getCircuitBreaker(provider)?.getStatus?.()?.state;
+    const circuitBreakerState: ProviderCandidate["circuitBreakerState"] =
+      breakerStateRaw === "OPEN" || breakerStateRaw === "HALF_OPEN" ? breakerStateRaw : "CLOSED";
+    const connection = target.connectionId ? connectionById.get(target.connectionId) : undefined;
+    const connectionStatusReason = getConnectionStatusQuotaCutoffReason(connection);
+    const statusCutoffReason = quotaCutoffEnabled ? connectionStatusReason : undefined;
+    let quotaRemaining = 100;
+    let quotaCutoffBlocked = false;
+    let quotaCutoffReason: string | undefined;
+    let statusPenalty = false;
+    let statusPenaltyReason: string | undefined;
+    if (statusCutoffReason) {
+      quotaCutoffBlocked = true;
+      quotaCutoffReason = statusCutoffReason;
+      quotaRemaining = 0;
+    } else if (connectionStatusReason) {
+      statusPenalty = true;
+      statusPenaltyReason = connectionStatusReason;
+    }
+    return {
+      stepId: target.stepId,
+      executionKey: target.executionKey,
+      modelStr,
+      provider,
+      model,
+      quotaRemaining,
+      quotaTotal: 100,
+      circuitBreakerState,
+      costPer1MTokens: 1,
+      p95LatencyMs,
+      latencyStdDev: Math.max(10, p95LatencyMs * 0.1),
+      errorRate: 0.05,
+      accountTier: "standard" as const,
+      quotaResetIntervalSecs: 86400,
+      contextAffinity: 0,
+      resetWindowAffinity: 0.5,
+      quotaCutoffBlocked,
+      quotaCutoffReason,
+      statusPenalty,
+      statusPenaltyReason,
+      connectionPoolSize: connectionPoolCounts.get(provider) ?? 1,
+      connectionId: target.connectionId ?? undefined,
+    };
+  });
 
   // Filter out candidates whose model is hidden by the user in the dashboard
   return candidates.filter((c) => {
@@ -717,26 +575,6 @@ export async function handleComboChat({
   }
 
   const cfg = config as Record<string, unknown>;
-  const fusionDispatch = await tryFusionDispatch({
-    body,
-    combo,
-    cfg,
-    config,
-    strategy,
-    allCombos,
-    nesting,
-    handleSingleModel,
-    handleSingleModelWithTimeout,
-    isModelAvailable,
-    log,
-    settings,
-    relayOptions,
-    signal,
-    apiKeyAllowedConnections,
-    hiddenModelsByProvider,
-    runCombo: handleComboChat,
-  });
-  if (fusionDispatch) return fusionDispatch;
 
   // Chaos mode (parallel multi-model dispatch): detection + dispatch live in
   // chaosEngine.ts (dispatchChaosFromCombo), returning null when not chaos-enabled.
@@ -826,7 +664,7 @@ export async function handleComboChat({
     hiddenModelsByProvider,
   });
   if ("earlyResponse" in targetResolution) return targetResolution.earlyResponse;
-  const { stickyWeightedLimit, getWeightedStepKeyForTarget, preScreenMap } = targetResolution;
+  const { preScreenMap } = targetResolution;
   const _sticky = targetResolution.sticky;
   let orderedTargets = targetResolution.orderedTargets;
 
@@ -1420,12 +1258,6 @@ export async function handleComboChat({
             if (provider && provider !== "unknown") {
               recordProviderSuccess(provider, effectiveConnectionId || undefined);
             }
-            if (strategy === "weighted" && stickyWeightedLimit > 1) {
-              const stickySuccessKey = getWeightedStepKeyForTarget(target);
-              if (stickySuccessKey) {
-                recordStickyWeightedSuccess(combo.name, stickySuccessKey, stickyWeightedLimit);
-              }
-            }
             // Webhook fan-out: best-effort, never blocks the response stream.
             notifyWebhookEvent("request.completed", {
               combo: combo.name,
@@ -1550,7 +1382,7 @@ export async function handleComboChat({
               }
             }
             if (_sticky.messageHash && target.connectionId)
-              recordStickyBinding(_sticky.messageHash, target.connectionId); // LKGP (#919):
+              void _sticky.messageHash; // sticky sessions removed — no-op
             if (provider) {
               const connId = effectiveConnectionId || undefined;
               void (async () => {
@@ -1733,7 +1565,7 @@ export async function handleComboChat({
           // get the same error. Skip all remaining targets with the same modelStr
           // instead of burning attempts one key at a time.
           const isDeterministicParamError =
-            (result.status === 422 || result.status === 400) &&
+            (result.status === 422 || result.status === 400 || result.status === 403) &&
             isDeterministicParamFailure(errorText);
 
           // PROACTIVE STRIP + RETRY: If the error is reasoning_effort-related,
@@ -2165,25 +1997,29 @@ export async function handleComboChat({
         null;
       let probeApplied = false;
 
+      // Thin gateway: probe phase disabled — it fires up to 10 concurrent upstream
+      // requests just to check if providers are alive. The main combo loop already
+      // handles failover sequentially. The probe added CPU/memory overhead without
+      // improving reliability for a thin gateway.
+      if (orderedTargets.length > 50) orderedTargets.length = 50;
+      /* probe disabled for thin gateway
       if (orderedTargets.length > 20 && !signal?.aborted) {
+        if (orderedTargets.length > 50) orderedTargets.length = 50;
         probePromise = startProbePhase(
           combo.name,
           orderedTargets,
-          handleSingleModel, // raw handler — probe has its own timeout
+          handleSingleModel,
           body as Record<string, unknown>,
           log,
           signal ?? undefined,
-          { minPoolSize: 20, concurrency: 40, timeoutMs: 3000, cacheTtlMs: 60_000 }
+          { minPoolSize: 20, concurrency: 10, timeoutMs: 3000, cacheTtlMs: 60_000 }
         );
-        // If cache hit, probePromise resolves immediately with cached results.
-        // Apply them right away — no need to wait for first attempt to fail.
         if (probePromise) {
           const cached = await Promise.race([
             probePromise.then((r) => r),
-            new Promise<null>((resolve) => setTimeout(() => resolve(null), 50)), // 50ms — cache hit returns instantly, fresh probe takes seconds
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 50)),
           ]);
           if (cached && cached.elapsedMs < 1000) {
-            // Cache hit (completed in <1s) — apply immediately
             for (const model of cached.paramErrorModels) failedModelSet.add(model);
             for (const provider of cached.rateLimitedProviders) {
               log.info(
@@ -2195,10 +2031,9 @@ export async function handleComboChat({
             orderedTargets = reorderByProbeResults(orderedTargets, cached);
             probeApplied = true;
           }
-          // If it took >50ms (fresh probe), don't block — let the main loop start.
-          // Probe results will be applied after the first target fails.
         }
       }
+      end probe disabled */
 
       for (let i = 0; i < orderedTargets.length; i++) {
         if (anySuccess || comboExpired) break;
@@ -2235,17 +2070,9 @@ export async function handleComboChat({
         runningTasks.add(task);
         task.finally(() => runningTasks.delete(task));
 
-        if (zeroLatencyOptimizationsEnabled && config.hedging && i + 1 < orderedTargets.length) {
-          const hedgeDelay = resolveDelayMs(config.hedgeDelayMs, 500);
-          let timeoutResolve: () => void;
-          const timeoutPromise = new Promise<void>((r) => {
-            timeoutResolve = r;
-            setTimeout(r, hedgeDelay);
-          });
-          await Promise.race([task, globalPromise, timeoutPromise]);
-        } else {
-          await Promise.race([task, globalPromise]);
-        }
+        // Thin gateway: hedging disabled — it launches concurrent upstream
+        // requests to multiple targets, wasting resources. Sequential failover only.
+        await Promise.race([task, globalPromise]);
 
         // Global combo timeout check: after each target completes, stop trying
         // further targets if the total elapsed time exceeds comboTimeoutMs.
@@ -2597,16 +2424,15 @@ async function handleRoundRobinCombo({
   // Put recently-succeeded models first (cross-request cache)
   const orderedTargets = reorderTargetsByRecentSuccess(rrOrderedTargets);
   const tagFilteredTargets = await applyRequestTagRouting(orderedTargets, body, log);
-  const evalRankedTargets = orderTargetsByEvalScores(tagFilteredTargets, config.evalRouting, log);
-  const knownContextOverflow = getKnownContextOverflow(evalRankedTargets, body);
+  const knownContextOverflow = getKnownContextOverflow(tagFilteredTargets, body);
   if (knownContextOverflow) {
     return errorResponseWithComboDiagnostics(
       400,
       `Request requires approximately ${knownContextOverflow.requiredContextTokens} tokens, but the largest known context limit in this combo is ${knownContextOverflow.maxKnownContextTokens} tokens. Reduce or compact the request context.`,
       {
-        poolSize: evalRankedTargets.length,
+        poolSize: tagFilteredTargets.length,
         attempted: 0,
-        excluded: evalRankedTargets.map((target) => ({
+        excluded: tagFilteredTargets.map((target) => ({
           provider: target.provider,
           model: target.modelStr,
           reason: "context_window",
@@ -2623,7 +2449,7 @@ async function handleRoundRobinCombo({
     (settings as { compatFilterFailOpen?: unknown } | null | undefined)?.compatFilterFailOpen ===
       true;
   let filteredTargets = filterTargetsByRequestCompatibility(
-    evalRankedTargets,
+    tagFilteredTargets,
     body,
     log,
     "Context-aware round-robin fallback",
@@ -2635,14 +2461,14 @@ async function handleRoundRobinCombo({
   // runtime-unavailable, we must reconsider these before returning 503, instead of
   // permanently dropping a compat-rejected-but-healthy provider.
   const compatRejectedTargets = computeCompatRejectedTargets(
-    evalRankedTargets,
+    tagFilteredTargets,
     filteredTargets,
     body
   );
   let modelCount = filteredTargets.length;
   if (modelCount === 0) {
     const exhaustion = describeCapabilityFilterExhaustion(
-      evalRankedTargets,
+      tagFilteredTargets,
       body,
       rrExpandedCombo?.name || combo?.name
     );
@@ -2651,7 +2477,7 @@ async function handleRoundRobinCombo({
         400,
         exhaustion.message,
         {
-          poolSize: evalRankedTargets.length,
+          poolSize: tagFilteredTargets.length,
           attempted: 0,
           excluded: exhaustion.excluded,
           attemptOrder: [],
@@ -2752,53 +2578,9 @@ async function handleRoundRobinCombo({
     rrCounters.set(combo.name, counter + 1);
   }
 
-  // #3825: per-conversation session stickiness for round-robin. weighted/priority honor a
-  // sticky connection via applySessionStickiness, but this RR handler returns before that
-  // call — so sessionless RR combos rotated every turn, busting the upstream prompt-cache.
-  // Reuse the SAME mechanism: start the rotation at the conversation's sticky connection
-  // (the loop still falls through to the other targets on failure → failover preserved).
-  // #6168: honor the session-stickiness opt-out here too, otherwise round-robin would
-  // still pin the conversation even when the flag is set. Per-combo `config` overrides
-  // the global `settings.disableSessionStickiness` fallback (default false).
-  const disableSessionStickiness = resolveDisableSessionStickiness(
-    config as Record<string, unknown> | null | undefined,
-    settings as Record<string, unknown> | null | undefined
-  );
-  const rrAffinityEnabled = settings?.promptCacheAffinityEnabled !== false;
-  if (rrAffinityEnabled && resolvePromptCacheAffinityKey(body)) {
-    filteredTargets = await expandPromptCacheAffinityTargets(filteredTargets);
-    modelCount = filteredTargets.length;
-  }
-  const _rrSessionSticky = disableSessionStickiness
-    ? ({ targets: filteredTargets, messageHash: null, stuck: false } as const)
-    : await applySessionStickiness(
-        filteredTargets,
-        // #7270: normalize both wire shapes (.messages / Responses-API .input) so RR
-        // stickiness engages on the /v1/responses surface, not just Chat Completions.
-        normalizeStickinessMessages(body as { messages?: unknown; input?: unknown })
-      );
-  const rrAffinity = applyPromptCacheAffinity(filteredTargets, body, rrAffinityEnabled);
-  if (rrAffinity.applied) {
-    const stickyFirst = _rrSessionSticky.stuck ? _rrSessionSticky.targets[0] : null;
-    filteredTargets = stickyFirst
-      ? [stickyFirst, ...rrAffinity.targets.filter((target) => target !== stickyFirst)]
-      : rrAffinity.targets;
-    log.debug?.("COMBO-RR", "Prompt-cache affinity applied", {
-      source: rrAffinity.source,
-      fingerprint: rrAffinity.fingerprint,
-      targetCount: filteredTargets.length,
-    });
-  }
+  // Session stickiness + prompt-cache affinity removed for thin gateway.
+  const _rrSessionSticky = { targets: filteredTargets, messageHash: null, stuck: false } as const;
   let rrStartIndex = startIndex;
-  if (rrAffinity.applied) {
-    rrStartIndex = 0;
-  }
-  if (_rrSessionSticky.stuck) {
-    const stickyIdx = filteredTargets.findIndex(
-      (t) => t.connectionId === _rrSessionSticky.targets[0]?.connectionId
-    );
-    if (stickyIdx >= 0) rrStartIndex = stickyIdx;
-  }
 
   const clientRequestedStream = body?.stream === true;
   const startTime = Date.now();
@@ -3041,11 +2823,7 @@ async function handleRoundRobinCombo({
             rrCounters.set(combo.name, modelIndex + 1);
           }
 
-          // #3825: (re)record the sticky binding so the next turn re-pins (prompt-cache).
-          if (_rrSessionSticky.messageHash) {
-            const stickyConn = effectiveConnectionId || target.connectionId;
-            if (stickyConn) recordStickyBinding(_rrSessionSticky.messageHash, stickyConn);
-          }
+          // Session stickiness removed — no sticky binding to record.
 
           if (provider) {
             const connId = effectiveConnectionId || undefined;

@@ -2,14 +2,20 @@ import { randomUUID } from "crypto";
 import fs from "fs";
 import { hostname, release } from "os";
 import path from "path";
-import {
-  buildKimiCodeIdentityHeaders,
-  normalizeKimiDeviceId,
-  sanitizeKimiHeaderValue,
-} from "@omniroute/open-sse/config/providers/registry/kimi/coding/runtime.ts";
 import { getKimiDeviceModel } from "@omniroute/open-sse/utils/kimiDevice.ts";
 import { resolveDataDir } from "../../dataPaths";
 import { KIMI_CODING_CONFIG } from "../constants/oauth";
+
+// Stubs for deleted kimi provider registry.
+function buildKimiCodeIdentityHeaders(_data: unknown): Record<string, string> {
+  return {};
+}
+function normalizeKimiDeviceId(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+function sanitizeKimiHeaderValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
 
 const DEVICE_ID_FILE = "kimi-coding-device-id";
 

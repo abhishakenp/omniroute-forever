@@ -1,19 +1,28 @@
 /**
- * Elysia headless API gateway.
+ * Bun.serve headless API gateway.
  *
- * Thin API server using Elysia on Bun. Replaces the route-discovery + Bun.serve
- * approach with Elysia's typed routing. Route handlers in src/app/api/ still
- * export GET/POST/etc functions taking (Request, RouteContext) → Response.
- * Elysia delegates to them.
+ * Thin API server using Bun.serve directly (no Elysia). Route handlers in
+ * src/app/api/ export GET/POST/etc functions taking (Request, RouteContext).
  *
  * Usage:
  *   bun src/server/headless/server-elysia.ts
  *   bun src/server/headless/server-elysia.ts --port 20128
  */
 
-import { Elysia } from "elysia";
-import { readdirSync, statSync, existsSync } from "node:fs";
+import { readdirSync, statSync, existsSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+
+// ── Load DATA_DIR/.env into process.env (if not already set) ──────────────
+(() => {
+  const dataDir = process.env.DATA_DIR || join(process.env.HOME || "", ".omniroute");
+  const envPath = join(dataDir, ".env");
+  if (existsSync(envPath)) {
+    for (const line of readFileSync(envPath, "utf8").split("\n")) {
+      const m = line.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+      if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
+    }
+  }
+})();
 
 // ── Route discovery (same logic as router.ts, simplified) ───────────────────
 
@@ -166,11 +175,6 @@ async function loadRouteHandler(route: CompiledRoute): Promise<RouteHandler> {
   return handler;
 }
 
-async function preloadRoutes(routes: CompiledRoute[], paths: string[]) {
-  const toPreload = routes.filter((r) => paths.some((p) => r.originalPath === p || r.originalPath.startsWith(p + "/")));
-  await Promise.all(toPreload.map((r) => loadRouteHandler(r).catch((err) => console.warn(`[elysia] Failed to preload ${r.originalPath}: ${err.message}`))));
-}
-
 // ── Concurrency control ─────────────────────────────────────────────────────
 
 const MAX_CONCURRENT = Number(process.env.OMNIROUTE_MAX_CONCURRENT || 8);
@@ -235,102 +239,89 @@ function isInternalRequest(req: Request): boolean {
 
 // ── Server ──────────────────────────────────────────────────────────────────
 
-async function startElysiaServer(opts: { port?: number; hostname?: string; preloadPaths?: string[] } = {}) {
+let discoveredRoutes: CompiledRoute[] = [];
+
+function healthResponse(): Response {
+  return Response.json({
+    status: "ok", mode: "bun",
+    inFlight, queued: requestQueue.length,
+    internalInFlight, internalQueued: internalQueue.length,
+    maxConcurrent: MAX_CONCURRENT, queueDepthCap: MAX_QUEUE_DEPTH, queueWaitTimeoutMs: QUEUE_TIMEOUT_MS,
+  });
+}
+
+async function handleRequest(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  const path = url.pathname;
+
+  // Health — bypass concurrency control
+  if (path === "/health" || path === "/") return healthResponse();
+
+  let routePath = path;
+  if (!routePath.startsWith("/api/")) routePath = "/api" + routePath;
+
+  const contentLength = Number(request.headers.get("content-length") ?? 0);
+  if (contentLength > MAX_BODY_BYTES) {
+    return Response.json({ error: { message: `Body too large (${contentLength} bytes, max ${MAX_BODY_BYTES})`, type: "invalid_request" } }, { status: 413 });
+  }
+
+  const match = matchRoute(routePath, discoveredRoutes);
+  if (!match) return Response.json({ error: { message: "Not found", type: "not_found" } }, { status: 404 });
+
+  let handler: RouteHandler;
+  try { handler = await loadRouteHandler(match.route); }
+  catch (err) {
+    console.error(`[gateway] Failed to load route ${match.route.originalPath}:`, err);
+    return Response.json({ error: { message: "Route module load failed", type: "server_error" } }, { status: 500 });
+  }
+
+  const method = request.method.toUpperCase();
+  const methodFn = handler[method as keyof RouteHandler];
+  if (typeof methodFn !== "function") {
+    const allow = HTTP_METHODS.filter((m) => typeof handler[m] === "function").join(", ");
+    return Response.json({ error: { message: `Method ${method} not allowed`, type: "invalid_request" } }, { status: 405, headers: { Allow: allow } });
+  }
+
+  const ctx: RouteContext = { params: match.params, searchParams: url.searchParams };
+  const internal = isInternalRequest(request);
+
+  try {
+    await acquireSlot(internal);
+    try {
+      return await methodFn(request, ctx);
+    } finally {
+      releaseSlot(internal);
+    }
+  } catch (err) {
+    if (err instanceof QueueRejectedError) {
+      console.warn(`[gateway] ${err.message}`);
+      return Response.json({ error: { message: err.message, type: "server_error", code: `queue_${err.reason}` } }, { status: 503, headers: { "Retry-After": "5" } });
+    }
+    console.error("[gateway] Unhandled error:", err);
+    return Response.json({ error: { message: "Internal server error", type: "server_error" } }, { status: 500 });
+  }
+}
+
+async function startServer(opts: { port?: number; hostname?: string } = {}) {
   const port = opts.port ?? Number(process.env.PORT ?? process.env.DASHBOARD_PORT ?? 20128);
   const hostname = opts.hostname ?? process.env.HOST ?? "0.0.0.0";
 
-  console.log("[elysia] Discovering API routes...");
-  const routes = discoverRoutes();
-  console.log(`[elysia] ${routes.length} core routes loaded`);
+  console.log("[gateway] Discovering API routes...");
+  discoveredRoutes = discoverRoutes();
+  console.log(`[gateway] ${discoveredRoutes.length} core routes loaded`);
 
-  if (opts.preloadPaths?.length) {
-    console.log(`[elysia] Preloading ${opts.preloadPaths.length} hot-path routes...`);
-    await preloadRoutes(routes, opts.preloadPaths);
-    console.log("[elysia] Hot-path routes preloaded");
-  }
-
-  const app = new Elysia()
-
-    // Health — bypass concurrency control
-    .get("/health", () => Response.json({
-      status: "ok", mode: "elysia",
-      inFlight, queued: requestQueue.length,
-      internalInFlight, internalQueued: internalQueue.length,
-      maxConcurrent: MAX_CONCURRENT, queueDepthCap: MAX_QUEUE_DEPTH, queueWaitTimeoutMs: QUEUE_TIMEOUT_MS,
-    }))
-    .get("/", () => Response.json({
-      status: "ok", mode: "elysia",
-      inFlight, queued: requestQueue.length,
-      internalInFlight, internalQueued: internalQueue.length,
-      maxConcurrent: MAX_CONCURRENT, queueDepthCap: MAX_QUEUE_DEPTH, queueWaitTimeoutMs: QUEUE_TIMEOUT_MS,
-    }))
-
-    // Catch-all: match against discovered routes
-    .all("/*", async ({ request, path, query, signal }): Promise<Response> => {
-      let routePath = path;
-      if (!routePath.startsWith("/api/")) routePath = "/api" + routePath;
-
-      const contentLength = Number(request.headers.get("content-length") ?? 0);
-      if (contentLength > MAX_BODY_BYTES) {
-        return Response.json({ error: { message: `Body too large (${contentLength} bytes, max ${MAX_BODY_BYTES})`, type: "invalid_request" } }, { status: 413 });
-      }
-
-      const match = matchRoute(routePath, routes);
-      if (!match) return Response.json({ error: { message: "Not found", type: "not_found" } }, { status: 404 });
-
-      let handler: RouteHandler;
-      try { handler = await loadRouteHandler(match.route); }
-      catch (err) {
-        console.error(`[elysia] Failed to load route ${match.route.originalPath}:`, err);
-        return Response.json({ error: { message: "Route module load failed", type: "server_error" } }, { status: 500 });
-      }
-
-      const method = request.method.toUpperCase();
-      const methodFn = handler[method as keyof RouteHandler];
-      if (typeof methodFn !== "function") {
-        const allow = HTTP_METHODS.filter((m) => typeof handler[m] === "function").join(", ");
-        return Response.json({ error: { message: `Method ${method} not allowed`, type: "invalid_request" } }, { status: 405, headers: { Allow: allow } });
-      }
-
-      const url = new URL(request.url);
-      const ctx: RouteContext = { params: match.params, searchParams: url.searchParams };
-      const internal = isInternalRequest(request);
-      const controller = new AbortController();
-
-      try {
-        await acquireSlot(internal, controller.signal);
-        try {
-          return await methodFn(request, ctx);
-        } finally {
-          releaseSlot(internal);
-        }
-      } catch (err) {
-        if (err instanceof QueueRejectedError) {
-          console.warn(`[elysia] ${err.message}`);
-          return Response.json({ error: { message: err.message, type: "server_error", code: `queue_${err.reason}` } }, { status: 503, headers: { "Retry-After": "5" } });
-        }
-        console.error("[elysia] Unhandled error:", err);
-        return Response.json({ error: { message: "Internal server error", type: "server_error" } }, { status: 500 });
-      }
-    });
-
-  const server = app.handle;
   Bun.serve({
-    port, hostname,
+    port,
+    hostname,
     maxRequestBodySize: MAX_BODY_BYTES,
-    fetch: app.fetch,
-    websocket: {
-      open(ws) { ws.data?.onOpen?.(ws); },
-      message(ws, message) { ws.data?.onMessage?.(ws, message); },
-      close(ws, code, reason) { ws.data?.onClose?.(ws, code, reason); },
-    },
+    fetch: handleRequest,
   });
 
-  console.log(`[elysia] Server listening on http://${hostname}:${port}`);
-  console.log(`[elysia] RSS: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`);
+  console.log(`[gateway] Server listening on http://${hostname}:${port}`);
+  console.log(`[gateway] RSS: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`);
 
-  process.on("SIGTERM", () => { console.log("[elysia] SIGTERM — shutting down"); process.exit(0); });
-  process.on("SIGINT", () => { console.log("[elysia] SIGINT — shutting down"); process.exit(0); });
+  process.on("SIGTERM", () => { console.log("[gateway] SIGTERM — shutting down"); process.exit(0); });
+  process.on("SIGINT", () => { console.log("[gateway] SIGINT — shutting down"); process.exit(0); });
 }
 
 // ── CLI entry point ─────────────────────────────────────────────────────────
@@ -339,14 +330,9 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   let port: number | undefined;
   let hostname: string | undefined;
-  const preloadPaths: string[] = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--port" && args[i + 1]) { port = Number(args[i + 1]); i++; }
     else if (args[i] === "--host" && args[i + 1]) { hostname = args[i + 1]; i++; }
-    else if (args[i] === "--preload" && args[i + 1]) { preloadPaths.push(...args[i + 1].split(",").map((s) => s.trim())); i++; }
   }
-  if (preloadPaths.length === 0) {
-    preloadPaths.push("/v1/chat/completions", "/v1/messages", "/v1/embeddings", "/v1/models", "/v1/responses", "/api/monitoring/health");
-  }
-  startElysiaServer({ port, hostname, preloadPaths }).catch((err) => { console.error("[elysia] Fatal:", err); process.exit(1); });
+  startServer({ port, hostname }).catch((err) => { console.error("[gateway] Fatal:", err); process.exit(1); });
 }

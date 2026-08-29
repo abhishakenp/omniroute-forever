@@ -93,6 +93,20 @@ const STRIP_RULES: StripRule[] = [
   // to read), hence the fixed cap.
   { provider: "azure-openai", match: /^gpt-4o-mini/i, maxOutputCap: 16384 },
   { provider: "azure-ai", match: /^gpt-4o-mini/i, maxOutputCap: 16384 },
+  // OpenAI's `store` param (persistence control, 2025) is only supported by
+  // OpenAI itself. Every other provider's OpenAI-compatible endpoint rejects it
+  // with 422 "Extra inputs are not permitted" (Mistral) or 400. Prime-agent
+  // sends store:false by default; strip it for all non-OpenAI providers.
+  { provider: "mistral", match: /.*/, drop: ["store"] },
+  { provider: "cohere", match: /.*/, drop: ["store"] },
+  { provider: "openrouter", match: /.*/, drop: ["store"] },
+  { provider: "deepseek", match: /.*/, drop: ["store"] },
+  { provider: "opencode", match: /.*/, drop: ["store"] },
+  { provider: "auggie", match: /.*/, drop: ["store"] },
+  { provider: "pollinations", match: /.*/, drop: ["store"] },
+  { provider: "hackclub", match: /.*/, drop: ["store"] },
+  { provider: "duckduckgo-web", match: /.*/, drop: ["store"] },
+  { provider: "felo-web", match: /.*/, drop: ["store"] },
 ];
 
 function matches(rule: StripRule, model: string): boolean {

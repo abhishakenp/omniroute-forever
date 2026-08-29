@@ -4,10 +4,13 @@ import {
   fixMissingToolResponses,
   stripOrphanedToolResults,
 } from "./helpers/toolCallHelper.ts";
-import {
-  NON_ANTHROPIC_THINKING_PLACEHOLDER,
-  prepareClaudeRequest,
-} from "./helpers/claudeHelper.ts";
+// Lazy import to avoid loading claudeHelper (13MB) for non-Claude providers.
+let _claudeHelper: any = null;
+function getClaudeHelperMod() {
+  if (!_claudeHelper) _claudeHelper = require("./helpers/claudeHelper.ts");
+  return _claudeHelper;
+}
+import { NON_ANTHROPIC_THINKING_PLACEHOLDER } from "../utils/reasoningPlaceholder.ts";
 import { filterToOpenAIFormat } from "./helpers/openaiHelper.ts";
 import {
   providerHonorsOpenAIFormatCacheControl,
@@ -24,20 +27,23 @@ import { getRequestTranslator, getResponseTranslator } from "./registry.ts";
 import { bootstrapTranslatorRegistry } from "./bootstrap.ts";
 import { hasThinkingConfig, normalizeThinkingConfig } from "../services/provider.ts";
 import { applyThinkingBudget } from "../services/thinkingBudget.ts";
-import { applyReasoningRuleDirective } from "@/lib/reasoningRouting/policy";
-import { getModelPreserveVideoUrl } from "@/lib/db/models/modelPreserveVideoUrl";
+// Thin gateway: reasoningRouting/policy (25MB) removed — reasoning rule directives
+// are a routing-intelligence feature, not a translation concern.
+// Thin gateway: modelPreserveVideoUrl (18MB) removed — moonshot/kimi video URL
+// preservation is a provider quirk, not a format translation concern.
 import { getResolvedModelCapabilities, supportsReasoning } from "../services/modelCapabilities.ts";
 import { normalizeRoles } from "../services/roleNormalizer.ts";
 import { hoistLeadingSystemMessage } from "./helpers/strictSystemHoist.ts";
-import {
-  lookupReasoning,
-  recordReplay,
-  requiresReasoningReplay,
-} from "../services/reasoningCache.ts";
+// Lazy: reasoningCache is 37MB — only needed for DeepSeek/Kimi/Qwen thinking models.
+let _reasoningCache: any = null;
+function getReasoningCache() {
+  if (!_reasoningCache) _reasoningCache = require("../services/reasoningCache.ts");
+  return _reasoningCache;
+}
 import { normalizeResponsesReasoningEffort } from "./request/openai-responses/helpers.ts";
 
-bootstrapTranslatorRegistry();
 export { register } from "./registry.ts";
+export { bootstrapTranslatorRegistry };
 
 function normalizeResponsesInputItem(item) {
   if (typeof item === "string") {
@@ -161,7 +167,9 @@ function isReasoningOnlyReplayTarget(provider: unknown, model: unknown): boolean
     /(^|\/)deepseek/i.test(normalizedModel) ||
     normalizedProvider === "xiaomi-mimo" ||
     /(^|\/)mimo/i.test(normalizedModel) ||
-    requiresReasoningReplay({
+    // Thin gateway: only call requiresReasoningReplay for known reasoning providers.
+    (normalizedProvider === "opencode-go" || normalizedProvider === "opencode-zen" || normalizedProvider === "opencode" || normalizedProvider === "kimi-coding" || normalizedProvider === "kimi-coding-apikey" || normalizedProvider === "siliconflow" || normalizedProvider === "nebius" || normalizedProvider === "deepinfra" || normalizedProvider === "sambanova" || normalizedProvider === "fireworks" || normalizedProvider === "together") &&
+    getReasoningCache().requiresReasoningReplay({
       provider: normalizedProvider,
       model: normalizedModel,
       allowLegacyFallback: false,
@@ -240,7 +248,9 @@ export function translateRequest(
   const normalizedModel = String(model ?? "");
   const isKimiCoding =
     normalizedProvider === "kimi-coding" || normalizedProvider === "kimi-coding-apikey";
-  const requiresExplicitReasoningReplay = requiresReasoningReplay({
+  // Thin gateway: only check reasoning replay for known reasoning providers.
+  const isReasoningProvider = normalizedProvider === "deepseek" || normalizedProvider === "opencode" || normalizedProvider === "opencode-go" || normalizedProvider === "opencode-zen" || normalizedProvider === "kimi-coding" || normalizedProvider === "kimi-coding-apikey" || normalizedProvider === "xiaomi-mimo" || /(^|\/)deepseek/i.test(normalizedModel) || /(^|\/)mimo/i.test(normalizedModel);
+  const requiresExplicitReasoningReplay = isReasoningProvider && getReasoningCache().requiresReasoningReplay({
     provider: normalizedProvider,
     model: normalizedModel,
     allowLegacyFallback: false,
@@ -250,9 +260,7 @@ export function translateRequest(
 
   // Phase 2: Apply thinking budget control before normalization
   result = applyThinkingBudget(result);
-  // Explicit reasoning-routing policies are final. The marker is internal and is
-  // consumed here before any provider translation can see it.
-  result = applyReasoningRuleDirective(result);
+  // Thin gateway: reasoning-routing policy directive removed.
 
   // Normalize thinking config: remove if lastMessage is not user
   normalizeThinkingConfig(result);
@@ -403,7 +411,7 @@ export function translateRequest(
     provider: normalizedProvider,
     model: normalizedModel,
   });
-  const isReasoner = requiresReasoningReplay({
+  const isReasoner = isReasoningProvider && getReasoningCache().requiresReasoningReplay({
     provider: normalizedProvider,
     model: normalizedModel,
     thinkingEnabled: hasThinkingConfig(result),
@@ -426,11 +434,9 @@ export function translateRequest(
         providerHonorsOpenAIFormatCacheControl(provider, connectionCacheOverride),
       // #4849 regression guard: keep client reasoning_content for replay providers.
       preserveReasoningContent: isReasoner,
-      // Per-provider/model preserveVideoUrl flag from compat overrides.
-      // Falls back to true for moonshot/kimi when unset (legacy behavior).
+      // Thin gateway: modelPreserveVideoUrl removed — default to provider check.
       preserveVideoUrl:
-        getModelPreserveVideoUrl(normalizedProvider, normalizedModel) ??
-        (normalizedProvider === "moonshot" || normalizedProvider === "kimi"),
+        normalizedProvider === "moonshot" || normalizedProvider === "kimi",
     });
   }
 
@@ -445,7 +451,7 @@ export function translateRequest(
   if (targetFormat === FORMATS.CLAUDE) {
     const isClaudePassthrough = sourceFormat === FORMATS.CLAUDE;
     const preserveCache = isClaudePassthrough || options?.preserveCacheControl === true;
-    result = prepareClaudeRequest(result, provider, preserveCache, model, {
+    result = getClaudeHelperMod().prepareClaudeRequest(result, provider, preserveCache, model, {
       fallbackToHeuristicWhenNoMarkers: true,
     });
   }
@@ -573,7 +579,7 @@ export function translateRequest(
         // Client reasoning wins above. Otherwise try authentic replay before
         // retaining Kimi Code's empty protocol marker as the final fallback.
         if (firstToolUseId) {
-          const cached = lookupReasoning(firstToolUseId);
+          const cached = getReasoningCache().lookupReasoning(firstToolUseId);
           if (cached) {
             if (thinkingBlock) {
               thinkingBlock.type = "thinking";
@@ -586,7 +592,7 @@ export function translateRequest(
                 thinking: cached,
               });
             }
-            recordReplay();
+            getReasoningCache().recordReplay();
             continue;
           }
         }
@@ -627,10 +633,10 @@ export function translateRequest(
         ? msg.tool_calls[0]?.id
         : getAssistantMessageCacheKey(result, messageIndex);
       if (cacheKey) {
-        const cached = lookupReasoning(cacheKey);
+        const cached = getReasoningCache().lookupReasoning(cacheKey);
         if (cached) {
           msg.reasoning_content = cached;
-          recordReplay();
+          getReasoningCache().recordReplay();
           continue;
         }
       }

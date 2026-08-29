@@ -4,10 +4,10 @@
  */
 
 export * from "./providers/shared.ts";
-export {
-  ALIBABA_MODEL_STUDIO_MODELS,
-  ALIBABA_MODEL_STUDIO_MODELS as ALIBABA_DASHSCOPE_MODELS,
-} from "./providers/registry/alibaba/index.ts";
+// Deleted provider registry stubs — re-export empty arrays so downstream
+// imports (e.g. providerModelsConfig.ts) keep compiling without the module.
+export const ALIBABA_MODEL_STUDIO_MODELS: readonly never[] = [];
+export const ALIBABA_DASHSCOPE_MODELS: readonly never[] = ALIBABA_MODEL_STUDIO_MODELS;
 export { REGISTRY } from "./providers/index.ts";
 import { REGISTRY } from "./providers/index.ts";
 import {

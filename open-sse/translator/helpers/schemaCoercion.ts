@@ -1,7 +1,12 @@
-import {
-  isDeepSeekReasoningModel,
-  requiresReasoningReplay,
-} from "../../services/reasoningCache.ts";
+// Lazy import to avoid loading reasoningCache (55MB) for non-reasoning providers.
+let _requiresReasoningReplay: ((opts: { provider: string; model: string; thinkingEnabled: boolean }) => boolean) | null = null;
+function getRequiresReasoningReplay() {
+  if (!_requiresReasoningReplay) {
+    const mod = require("../../services/reasoningCache.ts");
+    _requiresReasoningReplay = mod.requiresReasoningReplay;
+  }
+  return _requiresReasoningReplay;
+}
 
 /**
  * Shared sanitizers for tool payloads that arrive from IDEs/SDKs with
@@ -376,7 +381,7 @@ export function injectEmptyReasoningContentForToolCalls(
   const normalizedModel = String(model ?? "");
 
   // Check if this provider/model requires reasoning replay (DeepSeek V4, Kimi K2, etc.)
-  const needsReasoning = requiresReasoningReplay({
+  const needsReasoning = getRequiresReasoningReplay()({
     provider: normalizedProvider,
     model: normalizedModel,
     thinkingEnabled: true,

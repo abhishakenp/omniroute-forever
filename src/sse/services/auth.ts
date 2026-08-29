@@ -2,6 +2,8 @@ import { randomUUID, createHash } from "crypto";
 import { extractGoogApiKeyHeader } from "./googApiKeyAuth.ts";
 import {
   getCachedRawProviderConnections,
+  getCachedProviderConnectionsMetadata,
+  getCachedRawProviderConnectionById,
   getCachedProviderNodes,
   getCachedSettings,
 } from "@/lib/db/readCache";
@@ -1022,9 +1024,11 @@ export async function getProviderCredentials(
     const sessionAffinityTtlMs = resolveSessionAffinityTtlMs(provider, options, settings);
 
     // Fix #922: Check for aliases (nvidia/nvidia_nim) to ensure credentials are found
+    // Two-phase selection: load metadata-only (no credentials) for filtering,
+    // then fetch credentials only for the winner via getCachedRawProviderConnectionById.
     const providersToSearch = await getProviderSearchPool(provider);
     const connectionResults = await Promise.all(
-      providersToSearch.map((p) => getCachedRawProviderConnections({ provider: p, isActive: true }))
+      providersToSearch.map((p) => getCachedProviderConnectionsMetadata({ provider: p, isActive: true, excludeTerminalStatus: true }))
     );
     const connectionsRaw = connectionResults.filter(Array.isArray).flat();
 
@@ -1636,6 +1640,15 @@ export async function getProviderCredentials(
         "AUTH",
         `${provider} selected account=${connection.id?.slice(0, 8)}... eligible=${orderedConnections.length} excluded=${excludedConnectionIds.size}`
       );
+    }
+
+    // Two-phase selection: the winner was selected from metadata-only rows.
+    // Now fetch the full row (with credential fields) for this single connection.
+    if (connection) {
+      const fullRow = await getCachedRawProviderConnectionById(connection.id);
+      if (fullRow) {
+        connection = createLazyConnectionView(fullRow);
+      }
     }
 
     const apiKeyHealth = connection.providerSpecificData?.apiKeyHealth as

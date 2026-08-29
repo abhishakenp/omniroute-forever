@@ -4,11 +4,6 @@ import { resolveMaxConcurrentByConnection } from "./concurrencyCaps.ts";
 import { sortTargetsByContextSize } from "./comboStructure.ts";
 import { selectQuotaShareTarget } from "./quotaShareStrategy.ts";
 import {
-  applyPromptCacheAffinity,
-  expandPromptCacheAffinityTargets,
-  resolvePromptCacheAffinityKey,
-} from "./promptCacheAffinity.ts";
-import {
   orderTargetsByHeadroom,
   orderTargetsByResetAwareQuota,
   orderTargetsByResetWindow,
@@ -202,15 +197,8 @@ export async function applyStrategyOrdering(
     orderedTargets = sortTargetsByContextSize(orderedTargets);
     log.info("COMBO", `Context-optimized ordering: largest first (${orderedTargets[0]?.modelStr})`);
   } else if (strategy === "cache-optimized") {
-    if (resolvePromptCacheAffinityKey(body)) {
-      orderedTargets = await expandPromptCacheAffinityTargets(orderedTargets);
-    }
-    const affinity = applyPromptCacheAffinity(orderedTargets, body, true, "global");
-    orderedTargets = affinity.targets;
-    log.info(
-      "COMBO",
-      `Cache-optimized ordering: ${orderedTargets[0]?.modelStr}${orderedTargets[0]?.connectionId ? ` (${orderedTargets[0].connectionId})` : ""} first`
-    );
+    // Prompt-cache affinity removed for thin gateway — pass through unfiltered targets.
+    log.info("COMBO", `Cache-optimized ordering: pass-through (prompt-cache affinity removed)`);
   } else if (strategy === "headroom") {
     orderedTargets = await orderTargetsByHeadroom(
       orderedTargets,

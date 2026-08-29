@@ -40,12 +40,45 @@
  * a bad-request or auth error wastes quota and will never succeed.
  */
 import { errorResponse } from "../utils/error.ts";
+import { extractTextContent } from "../translator/helpers/geminiHelper.ts";
 import type { ComboLogger, HandleSingleModel, ResolvedComboTarget } from "./combo/types.ts";
-// extractPanelText is a generic assistant-text extractor (OpenAI chat / Claude /
-// Gemini / Responses) — reused here to read each step's output, not fusion-specific.
-import { extractPanelText } from "./fusion.ts";
 
 type Body = Record<string, unknown>;
+
+/**
+ * Extract assistant text from a non-stream completion across formats
+ * (OpenAI chat, Claude messages, Gemini, OpenAI Responses). Returns "" if none.
+ * Inlined from the deleted fusion.ts — generic text extractor, not fusion-specific.
+ */
+function extractPanelText(json: unknown): string {
+  if (!json || typeof json !== "object") return "";
+  const j = json as Record<string, unknown>;
+
+  // OpenAI chat completion
+  const choices = j.choices as Array<Record<string, unknown>> | undefined;
+  const choice = choices?.[0];
+  if (choice) {
+    const msg = (choice.message ?? choice.delta ?? {}) as Record<string, unknown>;
+    const t = extractTextContent(msg.content);
+    if (t.trim()) return t;
+    if (typeof choice.text === "string" && choice.text.trim()) return choice.text;
+  }
+
+  // Claude messages (text blocks share OpenAI's {type:"text"} shape)
+  const claudeText = extractTextContent(j.content);
+  if (claudeText.trim()) return claudeText;
+
+  // Gemini (parts carry .text without a type discriminator)
+  const candidates = j.candidates as Array<Record<string, unknown>> | undefined;
+  const parts = (candidates?.[0]?.content as Record<string, unknown> | undefined)?.parts as
+    Array<{ text?: unknown }> | undefined;
+  if (Array.isArray(parts)) {
+    const t = parts.map((p) => (typeof p?.text === "string" ? p.text : "")).join("");
+    if (t.trim()) return t;
+  }
+
+  return "";
+}
 
 export type PipelineStep =
   | {

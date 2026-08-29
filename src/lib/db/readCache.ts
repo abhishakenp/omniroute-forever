@@ -139,6 +139,55 @@ export async function getCachedRawProviderConnections(
   return rows;
 }
 
+// Metadata-only columns for connection selection — excludes credential fields
+// (api_key, access_token, refresh_token, id_token, expires_at, token_expires_at).
+// The auth hot path loads hundreds of connections for filtering but only needs
+// credentials for the single winner. This keeps credential data out of RAM
+// during selection and scales to 10k+ connections without loading all secrets.
+const CONNECTION_METADATA_COLUMNS = [
+  "id", "provider", "auth_type", "name", "email", "priority", "is_active",
+  "test_status", "error_code", "last_error", "last_error_at", "last_error_type",
+  "last_error_source", "backoff_level", "rate_limited_until", "last_used_at",
+  "consecutive_use_count", "max_concurrent", "default_model", "project_id",
+  "display_name", "provider_specific_data", "quota_window_thresholds_json",
+  "rate_limit_overrides_json",
+];
+
+const metadataConnectionsCache = new TTLCache<unknown[]>(CONNECTIONS_TTL_MS, 500);
+
+/**
+ * Cached metadata-only connection query for the auth selection hot path.
+ * Loads all columns EXCEPT credentials (api_key, access_token, refresh_token,
+ * id_token, expires_at, token_expires_at). The caller selects a winner from
+ * metadata, then fetches credentials via getCachedRawProviderConnectionById.
+ */
+export async function getCachedProviderConnectionsMetadata(
+  filter?: Record<string, unknown>
+): Promise<unknown[]> {
+  const key = JSON.stringify(filter ?? {});
+  const cached = metadataConnectionsCache.get(key);
+  if (cached !== undefined) return cached;
+  const { getRawProviderConnections } = await import("./providers");
+  const rows = await getRawProviderConnections(filter, undefined, undefined, CONNECTION_METADATA_COLUMNS);
+  metadataConnectionsCache.set(key, rows);
+  return rows;
+}
+
+/**
+ * Fetch a single raw connection by ID (with credentials). Used after metadata-only
+ * selection to load credentials for the winner. Cached with 5s TTL.
+ */
+export async function getCachedRawProviderConnectionById(
+  id: string
+): Promise<Record<string, unknown> | null> {
+  const cached = connectionByIdCache.get(id);
+  if (cached !== undefined) return cached;
+  const { getRawProviderConnectionById } = await import("./providers");
+  const row = await getRawProviderConnectionById(id);
+  connectionByIdCache.set(id, row);
+  return row;
+}
+
 const connectionByIdCache = new TTLCache<Record<string, unknown> | null>(
   CONNECTIONS_TTL_MS,
   10_000

@@ -113,45 +113,17 @@ function adobeFireflySuccessResponse(data: {
  * pure system Chrome/Edge CDP only (packaged-safe, no Playwright/browser bundle).
  */
 async function loginAdobeFirefly(
-  connectionId: string,
-  body: { timeout?: unknown; freshSession?: unknown }
+  _connectionId: string,
+  _body: { timeout?: unknown; freshSession?: unknown }
 ): Promise<NextResponse> {
-  const timeout = typeof body.timeout === "number" ? body.timeout : undefined;
-  const freshSession = typeof body.freshSession === "boolean" ? body.freshSession : true;
-
-  // Pure system-browser CDP is the packaged-safe implementation. Do not open a second browser
-  // after failure: it creates ambiguous success/error races and the packaged runtime has no
-  // reliable Playwright browser bundle.
-  // startAdobeFireflyBrowserLogin always kills its Chrome tree in `finally` (no orphans).
-  try {
-    const { startAdobeFireflyBrowserLogin } =
-      await import("@omniroute/open-sse/services/adobeFireflyBrowserLogin.ts");
-    const pure = await startAdobeFireflyBrowserLogin(timeout, {
-      sessionKey: connectionId,
-      freshSession,
-    });
-    if (pure.success && pure.credentials?.accessToken) {
-      const persisted = await persistAdobeFireflyCredentials(connectionId, {
-        accessToken: pure.credentials.accessToken,
-        cookie: pure.credentials.cookie,
-        account: pure.account,
-      });
-      return adobeFireflySuccessResponse({
-        ...persisted,
-        via: "pure-cdp",
-      });
-    }
-    return Response.json(
-      {
-        success: false,
-        error: pure.error || "Adobe Firefly sign-in did not capture an authenticated IMS JWT.",
-      },
-      { status: 400 }
-    );
-  } catch (err) {
-    const msg = sanitizeErrorMessage(err instanceof Error ? err.message : err);
-    return Response.json({ success: false, error: msg }, { status: 400 });
-  }
+  // Browser-based Adobe Firefly login removed for thin API gateway.
+  return Response.json(
+    {
+      success: false,
+      error: "Adobe Firefly browser login is not available (browser executor removed)",
+    },
+    { status: 503 }
+  );
 }
 
 // --- POST: Start login flow -------------------------------------------------
@@ -189,43 +161,14 @@ export async function POST(
   }
 
   try {
-    // Generic web-cookie path: pass the provider SLUG (not the DB id) so
-    // TOKEN_EXTRACTION_CONFIGS can find the extraction config.
-    // Bug: the previous code passed `id` (connection UUID), so the lookup always
-    // missed and returned "No extraction config" without launching a browser.
-    const { inAppLoginService } = await import("@omniroute/open-sse/services/inAppLoginService.ts");
-
-    const result = await inAppLoginService.startLogin(providerSlug || id, {
-      timeout: typeof body.timeout === "number" ? body.timeout : undefined,
-    });
-
-    // Persist credentials if extraction succeeded
-    if (result.success && result.credentials) {
-      try {
-        const credentialsStr = JSON.stringify(result.credentials);
-        await updateProviderConnection(id, {
-          apiKey: credentialsStr,
-          providerSpecificData: result.credentials,
-        });
-
-        return Response.json({
-          success: true,
-          credentials: result.credentials,
-          persisted: true,
-        });
-      } catch (err) {
-        // Hard Rule #12: never put raw err.message/stack in a response body.
-        const msg = sanitizeErrorMessage(err instanceof Error ? err.message : err);
-        return Response.json(
-          { success: false, error: `Extracted but failed to persist: ${msg}` },
-          { status: 500 }
-        );
-      }
-    }
-
-    return Response.json(result, {
-      status: result.success ? 200 : 400,
-    });
+    // Browser-based in-app login removed for thin API gateway.
+    return Response.json(
+      {
+        success: false,
+        error: "Browser-based login is not available (browser executor removed)",
+      },
+      { status: 503 }
+    );
   } catch (err) {
     // Hard Rule #12: never put raw err.message/stack in a response body.
     const msg = sanitizeErrorMessage(err instanceof Error ? err.message : err);

@@ -1,4 +1,4 @@
-import pino from "pino";
+import { createLogger } from "@/shared/utils/logger";
 import { z } from "zod";
 
 import { buildErrorBody } from "@omniroute/open-sse/utils/error.ts";
@@ -6,7 +6,7 @@ import { buildErrorBody } from "@omniroute/open-sse/utils/error.ts";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { buildProviderHealthMatrix } from "@/lib/monitoring/providerHealthMatrix";
 
-const logger = pino({ name: "provider-health-matrix-api" });
+const logger = createLogger("provider-health-matrix-api");
 
 const healthMatrixQuerySchema = z.object({
   provider: z.string().trim().min(1).nullable(),

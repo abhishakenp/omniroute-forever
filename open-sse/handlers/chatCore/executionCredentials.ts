@@ -9,8 +9,18 @@
  * and threads the Claude Code session id when present. Side-effect-free.
  */
 
-import { getKimiCodeStaticThinkingPolicy } from "../../config/providers/registry/kimi/coding/runtime.ts";
 import { FORMATS } from "../../translator/formats.ts";
+
+// Stub for deleted kimi provider registry.
+type KimiThinkingPolicy = {
+  supportsThinking?: boolean;
+  alwaysThinking?: boolean;
+  supportedThinkingEfforts?: string[];
+  defaultThinkingEffort?: string;
+};
+function getKimiCodeStaticThinkingPolicy(_model?: unknown): KimiThinkingPolicy | null {
+  return null;
+}
 
 type CredentialsLike =
   | {

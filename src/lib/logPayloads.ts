@@ -123,7 +123,7 @@ export function redactPayload(payload: unknown): unknown {
 
 export function sanitizePayloadPII(payload: unknown): unknown {
   if (typeof payload === "string") {
-    return sanitizePII(payload).text;
+    return sanitizePII(payload);
   }
   if (!payload || typeof payload !== "object") {
     return payload;

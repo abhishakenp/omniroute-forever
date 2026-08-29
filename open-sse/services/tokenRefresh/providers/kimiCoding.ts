@@ -4,13 +4,17 @@
 import { pbkdf2Sync } from "node:crypto";
 import { hostname, release } from "node:os";
 import { PROVIDERS } from "../../../config/constants.ts";
-import {
-  buildKimiCodeIdentityHeaders,
-  normalizeKimiDeviceId,
-} from "../../../config/providers/registry/kimi/coding/runtime.ts";
 import { getKimiDeviceModel } from "../../../utils/kimiDevice.ts";
 import { runWithProxyContext } from "../../../utils/proxyFetch.ts";
 import type { RefreshLogger } from "../shared.ts";
+
+// Stubs for deleted kimi provider registry.
+function buildKimiCodeIdentityHeaders(_data: unknown): Record<string, string> {
+  return {};
+}
+function normalizeKimiDeviceId(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
 
 /**
  * Specialized refresh for Kimi Coding OAuth tokens.

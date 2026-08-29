@@ -13,15 +13,27 @@ import {
   parseClinepassRecommendedModels,
 } from "@omniroute/open-sse/services/clinepassModels.ts";
 import { buildClaudeCodeCompatibleHeaders } from "@omniroute/open-sse/services/claudeCodeCompatible.ts";
-import {
-  buildKimiCodeIdentityHeaders,
-  getKimiCodeCliUserAgent,
-  KIMI_CODING_MODELS_URL,
-} from "@omniroute/open-sse/config/providers/registry/kimi/coding/runtime.ts";
-import { ALIBABA_MODEL_STUDIO_MODELS } from "@omniroute/open-sse/config/providers/registry/alibaba/index.ts";
-import { QWEN_CLOUD_TEXT_MODELS } from "@omniroute/open-sse/config/providers/registry/qwen-cloud/index.ts";
-import { extractZaiToken } from "@omniroute/open-sse/executors/zai-web.ts";
+import { ALIBABA_MODEL_STUDIO_MODELS } from "@omniroute/open-sse/config/providerRegistry.ts";
 import { normalizeOpenAiLikeModelsResponse } from "./normalizers";
+
+// Stubs for deleted kimi / qwen-cloud provider registries.
+const buildKimiCodeIdentityHeaders = (_data: unknown): Record<string, string> => ({});
+const getKimiCodeCliUserAgent = (): string => "kimi-coding-cli";
+const KIMI_CODING_MODELS_URL = "https://api.kimi.com/coding/v1/models";
+const QWEN_CLOUD_TEXT_MODELS: readonly never[] = [];
+
+/**
+ * Extract a bearer token from a stored credential string.
+ * Previously imported from the deleted zai-web.ts executor; inlined here as a
+ * simple passthrough (the executor's version extracted JWT from cookie strings).
+ */
+function extractZaiToken(token: string): string {
+  if (!token) return "";
+  // Handle "access_token=xxx" cookie format
+  const match = token.match(/access_token=([^;]+)/);
+  if (match) return match[1];
+  return token;
+}
 
 const DASHSCOPE_TEXT_MODEL_PREFIXES = [
   "qwen",

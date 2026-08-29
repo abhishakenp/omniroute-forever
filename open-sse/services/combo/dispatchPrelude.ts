@@ -15,14 +15,11 @@
 import { getCachedProviderConnections } from "../../../src/lib/db/readCache";
 import { getCircuitBreaker } from "../../../src/shared/utils/circuitBreaker";
 import { fisherYatesShuffle, getNextFromDeck } from "../../../src/shared/utils/shuffleDeck";
-import { handleFusionChat, type FusionTuning } from "../fusion.ts";
 import { parseModel } from "../model.ts";
 import { handlePipelineChat, type PipelineStep } from "../pipeline.ts";
 import type { resolveComboSetupConfig } from "../comboConfig.ts";
 import { clampComboDepth, resolveDelayMs } from "./comboPredicates.ts";
 import { resolveComboRuntimeUnits, resolveComboTargets } from "./comboStructure.ts";
-import { isComboModelVisible } from "./comboVisibility.ts";
-import { buildFusionHandleSingleModel, extractFusionPanelSpec } from "./fusionPanel.ts";
 import {
   clampStickyWeightedTargetLimit,
   getStickyRoundRobinStartIndex,
@@ -314,14 +311,12 @@ export async function tryPinnedModelDispatch(args: {
 }
 
 /**
- * Fusion strategy: parallel panel + judge synthesis. Handled here because it
- * neither iterates targets in order nor needs the failover/retry/credential
- * gate machinery that follows — it fans out, then synthesizes once.
- *
- * Also emits the #6455 misconfiguration warning for non-fusion combos that set
- * fusion-only config keys. Returns null for every non-fusion strategy.
+ * Fusion strategy: REMOVED — browser-based fusion dispatch deleted for thin API
+ * gateway. Always returns null (no-op) so the combo machinery falls through to
+ * the normal target iteration loop. Signature kept for backward-compatible
+ * import from combo.ts / strategyDispatch.ts.
  */
-export async function tryFusionDispatch(args: {
+export async function tryFusionDispatch(_args: {
   body: Record<string, unknown>;
   combo: ComboLike;
   cfg: Record<string, unknown>;
@@ -340,76 +335,7 @@ export async function tryFusionDispatch(args: {
   hiddenModelsByProvider?: HiddenModelsByProvider;
   runCombo: RunCombo;
 }): Promise<Response | null> {
-  const { cfg, combo, config, strategy, log } = args;
-  const configuredJudge = typeof cfg.judgeModel === "string" ? cfg.judgeModel : undefined;
-  // The panel is filtered for hidden models by resolveComboTargets, but the
-  // explicit judge is a bare string that never passes through it (#8878). Drop a
-  // hidden judge so fusion falls back to a surviving panel member instead of
-  // dispatching a model the operator hid.
-  const judgeModel =
-    configuredJudge && !isComboModelVisible(configuredJudge, null, args.hiddenModelsByProvider)
-      ? undefined
-      : configuredJudge;
-  const fusionTuning =
-    cfg.fusionTuning && typeof cfg.fusionTuning === "object"
-      ? (cfg.fusionTuning as FusionTuning)
-      : undefined;
-  if (strategy !== "fusion" && (configuredJudge || fusionTuning)) {
-    log.warn(
-      "COMBO",
-      `Combo "${combo.name}" sets config.judgeModel/fusionTuning but strategy is "${strategy}" — these fields are only consumed by the fusion strategy and will be ignored (#6455)`
-    );
-  }
-  if (strategy !== "fusion") return null;
-
-  const resolvedFusionTargets = resolveComboTargets(
-    combo,
-    args.allCombos,
-    clampComboDepth(config.maxComboDepth),
-    args.hiddenModelsByProvider
-  );
-  // extractFusionPanelSpec only understands model strings / combo refs, so the
-  // resolved targets have to be flattened before it runs. Keep them indexed so
-  // the panel can be rehydrated below — dispatching the bare strings strips
-  // `providerId` and every panel member loses its provider identity (#8878).
-  const resolvedByModelStr = new Map<string, (typeof resolvedFusionTargets)[number]>();
-  for (const target of resolvedFusionTargets) {
-    if (!resolvedByModelStr.has(target.modelStr)) resolvedByModelStr.set(target.modelStr, target);
-  }
-  const { panel: fusionPanel, comboRefUnits } = extractFusionPanelSpec(
-    resolvedFusionTargets.map((target) => target.modelStr),
-    combo.name,
-    null
-  );
-  // A panel entry naming a combo ref stays a string (it is a combo name, not a
-  // model); everything else regains its resolved target.
-  const fusionModels = fusionPanel.map((entry) =>
-    comboRefUnits.has(entry) ? entry : (resolvedByModelStr.get(entry) ?? entry)
-  );
-  // Untyped like the existing `nestingContext` further down — `nesting` is
-  // already `ComboNestingContext | null` per HandleComboChatOptions, no new
-  // import needed.
-  const fusionNesting = buildDefaultNesting(args.nesting, combo.name, config);
-  const fusionHandleSingleModel =
-    comboRefUnits.size > 0
-      ? buildFusionHandleSingleModel({
-          handleSingleModel: args.handleSingleModelWithTimeout,
-          comboRefUnits,
-          allCombos: args.allCombos,
-          nesting: fusionNesting,
-          baseOptions: buildBaseOptions(args),
-          runCombo: args.runCombo,
-        })
-      : args.handleSingleModelWithTimeout;
-  return handleFusionChat({
-    body: args.body,
-    models: fusionModels,
-    handleSingleModel: fusionHandleSingleModel,
-    log,
-    comboName: combo.name,
-    judgeModel,
-    tuning: fusionTuning,
-  });
+  return null;
 }
 
 /**

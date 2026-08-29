@@ -38,7 +38,24 @@ import {
   type McpToolDefinition,
   type OpenAITool,
 } from "../utils/cursorAgentProtobuf.ts";
-import { resolveCursorImages, extractImageUrls, CursorImageError } from "../utils/cursorImages.ts";
+// cursorImages.ts (sharp-based image processing) removed for thin API gateway.
+// Stubs preserve the executor's interface; image resolution is a no-op.
+class CursorImageError extends Error {
+  status: number;
+  constructor(message: string, status = 400) {
+    super(message);
+    this.name = "CursorImageError";
+    this.status = status;
+  }
+}
+
+function extractImageUrls(_content: unknown): string[] {
+  return [];
+}
+
+async function resolveCursorImages(_urls: string[]): Promise<EncodedImage[]> {
+  return [];
+}
 import {
   estimateInputTokens,
   estimateOutputTokens,

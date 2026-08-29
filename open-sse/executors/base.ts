@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import { getRegistryEntry } from "../config/providerRegistry.ts";
 import {
@@ -10,7 +11,77 @@ import {
   mergeClientAnthropicBeta,
   normalizeAnthropicHeaderVariants,
 } from "../config/anthropicHeaders.ts";
-import { applyContextEditingToBody } from "../config/contextEditing.ts";
+const require_ = createRequire(import.meta.url);
+let _cliFingerprints: typeof import("../config/cliFingerprints.ts") | null = null;
+function getCliFingerprints() {
+  if (!_cliFingerprints) _cliFingerprints = require_("../config/cliFingerprints.ts");
+  return _cliFingerprints;
+}
+// ── Claude-specific lazy imports ────────────────────────────────────────────
+// These modules are only needed on the genuine Claude / Claude-Code-Compat /
+// Cline paths. A thin gateway routing to free providers (mistral, cohere,
+// openrouter) never touches them, so deferring their load keeps the cold
+// footprint small. Each getter caches its module on first use.
+let _claudeCodeCCH: typeof import("../services/claudeCodeCCH.ts") | null = null;
+function getClaudeCodeCCH() {
+  if (!_claudeCodeCCH) _claudeCodeCCH = require_("../services/claudeCodeCCH.ts");
+  return _claudeCodeCCH;
+}
+let _claudeCodeObfuscation: typeof import("../services/claudeCodeObfuscation.ts") | null = null;
+function getClaudeCodeObfuscation() {
+  if (!_claudeCodeObfuscation)
+    _claudeCodeObfuscation = require_("../services/claudeCodeObfuscation.ts");
+  return _claudeCodeObfuscation;
+}
+let _systemTransforms: typeof import("../services/systemTransforms.ts") | null = null;
+function getSystemTransforms() {
+  if (!_systemTransforms) _systemTransforms = require_("../services/systemTransforms.ts");
+  return _systemTransforms;
+}
+let _ccWireImageBuiltins: typeof import("../services/ccWireImageBuiltins.ts") | null = null;
+function getCcWireImageBuiltins() {
+  if (!_ccWireImageBuiltins)
+    _ccWireImageBuiltins = require_("../services/ccWireImageBuiltins.ts");
+  return _ccWireImageBuiltins;
+}
+let _schemaCoercion: typeof import("../translator/helpers/schemaCoercion.ts") | null = null;
+function getSchemaCoercion() {
+  if (!_schemaCoercion) _schemaCoercion = require_("../translator/helpers/schemaCoercion.ts");
+  return _schemaCoercion;
+}
+let _responsesInputSanitizer: typeof import("../services/responsesInputSanitizer.ts") | null =
+  null;
+function getResponsesInputSanitizer() {
+  if (!_responsesInputSanitizer)
+    _responsesInputSanitizer = require_("../services/responsesInputSanitizer.ts");
+  return _responsesInputSanitizer;
+}
+let _forceResponsesUpstream: typeof import("./forceResponsesUpstream.ts") | null = null;
+function getForceResponsesUpstream() {
+  if (!_forceResponsesUpstream)
+    _forceResponsesUpstream = require_("./forceResponsesUpstream.ts");
+  return _forceResponsesUpstream;
+}
+let _contextEditing: typeof import("../config/contextEditing.ts") | null = null;
+function getContextEditing() {
+  if (!_contextEditing) _contextEditing = require_("../config/contextEditing.ts");
+  return _contextEditing;
+}
+let _requestDefaults: typeof import("@/lib/providers/requestDefaults") | null = null;
+function getRequestDefaults() {
+  if (!_requestDefaults) _requestDefaults = require_("@/lib/providers/requestDefaults");
+  return _requestDefaults;
+}
+let _clineAuth: typeof import("@/shared/utils/clineAuth") | null = null;
+function getClineAuth() {
+  if (!_clineAuth) _clineAuth = require_("@/shared/utils/clineAuth");
+  return _clineAuth;
+}
+let _peerRouting: typeof import("@/shared/resilience/peerRouting") | null = null;
+function getPeerRouting() {
+  if (!_peerRouting) _peerRouting = require_("@/shared/resilience/peerRouting");
+  return _peerRouting;
+}
 import {
   findOffendingField,
   detectUnsupportedParam,
@@ -25,20 +96,37 @@ import {
   addParamToBlocklist,
   isAutoLearnGloballyEnabled,
 } from "@/lib/db/paramFilters";
-import { applyFingerprint, isCliCompatEnabled } from "../config/cliFingerprints.ts";
 import { supportsClaudeMaxEffort, supportsXHighEffort } from "../config/providerModels.ts";
-import { getThinkingBudgetConfig, ThinkingMode } from "../services/thinkingBudget.ts";
+// Thin gateway: thinkingBudget (14MB) lazy — only needed for reasoning models.
+let _thinkingBudget: any = null;
+function getThinkingBudget() {
+  if (!_thinkingBudget) _thinkingBudget = require_("../services/thinkingBudget.ts");
+  return _thinkingBudget;
+}
 import {
   recordFreeWindowAttempt,
   correctFromRateLimitHeaders,
   resolveAccountKey,
   isFreeVariantModel,
 } from "../services/openrouterFreeWindow.ts";
-import { gateOutboundRequest } from "../services/wafRateLimit.ts";
+// Thin gateway: wafRateLimit (3MB) lazy — not needed for thin gateway.
+let _wafRateLimit: any = null;
+function getWafRateLimit() {
+  if (!_wafRateLimit) _wafRateLimit = require_("../services/wafRateLimit.ts");
+  return _wafRateLimit;
+}
+// Thin gateway: sessionPool (7MB) lazy — only needed for OAuth providers.
+let _sessionPoolMod: any = null;
+function getSessionPoolMod() {
+  if (!_sessionPoolMod) {
+    const sp = require_("../services/sessionPool/sessionPool.ts");
+    const pr = require_("../services/sessionPool/poolRegistry.ts");
+    _sessionPoolMod = { SessionPool: sp.SessionPool, PoolRegistry: pr.PoolRegistry };
+  }
+  return _sessionPoolMod;
+}
 import type { PoolConfig } from "../services/sessionPool/types.ts";
 import type { Session } from "../services/sessionPool/session.ts";
-import { SessionPool } from "../services/sessionPool/sessionPool.ts";
-import { PoolRegistry } from "../services/sessionPool/poolRegistry.ts";
 import {
   getRotatingApiKey,
   getValidApiKey,
@@ -46,14 +134,12 @@ import {
 } from "../services/apiKeyRotator.ts";
 import type { KeyHealth } from "../services/apiKeyRotator.ts";
 import { getOpenAICompatibleType, isClaudeCodeCompatible } from "../services/provider.ts";
-import { usesCcWireImage } from "../services/ccWireImageBuiltins.ts";
 import {
   runWithOnPersist,
   getRefreshLeadMs,
   isUnrecoverableRefreshError,
 } from "../services/tokenRefresh.ts";
 import type { ProviderRequestDefaults } from "../services/providerRequestDefaults.ts";
-import { signRequestBody } from "../services/claudeCodeCCH.ts";
 import {
   appendAnthropicBetaHeader,
   CONTEXT_1M_BETA_HEADER,
@@ -61,15 +147,10 @@ import {
   modelHasNativeContext1m,
   modelSupportsContext1mBeta,
 } from "../services/claudeCodeCompatible.ts";
-import { getClaudeCodeCompatibleRequestDefaults } from "@/lib/providers/requestDefaults";
 import {
   cloakThirdPartyToolNames,
   remapToolNamesInRequest,
 } from "../services/claudeCodeToolRemapper.ts";
-import { obfuscateInBody } from "../services/claudeCodeObfuscation.ts";
-import { sanitizeClaudeToolSchemas } from "../translator/helpers/schemaCoercion.ts";
-import { sanitizeResponsesInputItems } from "../services/responsesInputSanitizer.ts";
-import { applySystemTransformPipeline, PROVIDER_CLAUDE } from "../services/systemTransforms.ts";
 import * as prl from "../utils/providerRequestLogging.ts";
 import {
   fixToolPairs,
@@ -92,15 +173,12 @@ import {
   stainlessOS,
   stripProxyToolPrefix,
 } from "./claudeIdentity.ts";
-import { withForcedResponsesUpstream } from "./forceResponsesUpstream.ts";
 import {
   mergeUpstreamExtraHeaders,
   setUserAgentHeader,
   applyConfiguredUserAgent,
   stripStainlessHeadersForOpenAICompat,
 } from "./base/headers.ts";
-import { applyPeerTraceHeader } from "@/shared/resilience/peerRouting";
-import { applyClineProtocolHeaders } from "@/shared/utils/clineAuth";
 // Header helpers extracted to a pure leaf; re-exported for external importers
 // (executors + tests) that import them from "./base.ts".
 export {
@@ -318,9 +396,11 @@ export class BaseExecutor {
     return this.provider;
   }
 
-  protected getPool(): SessionPool | null {
+  protected getPool(): import("../services/sessionPool/sessionPool.ts").SessionPool | null {
     if (!this.poolConfig) return null;
     if (!this._pool) {
+      const { SessionPool } = getSessionPoolMod();
+      const { PoolRegistry } = getSessionPoolMod();
       const pool = new SessionPool(this.provider, this.poolConfig);
       pool.warmUp(this.poolConfig.minSessions).catch(() => {});
       PoolRegistry.register(this.provider, pool);
@@ -514,7 +594,7 @@ export class BaseExecutor {
       const cloned = { ...body } as Record<string, unknown>;
 
       if (Array.isArray(cloned.input)) {
-        cloned.input = sanitizeResponsesInputItems(cloned.input, false);
+        cloned.input = getResponsesInputSanitizer().sanitizeResponsesInputItems(cloned.input, false);
       }
 
       if (Array.isArray(cloned.tools)) {
@@ -791,7 +871,7 @@ export class BaseExecutor {
     let thinkingBudgetClampedMax: number | null = null;
 
     for (let urlIndex = 0; urlIndex < fallbackCount; urlIndex++) {
-      const requestCredentials = withForcedResponsesUpstream(
+      const requestCredentials = getForceResponsesUpstream().withForcedResponsesUpstream(
         this.provider,
         body,
         activeCredentials
@@ -812,9 +892,9 @@ export class BaseExecutor {
 
       const usesClaudeCodeProtocol = this.usesClaudeCodeProtocol(requestCredentials);
       const fingerprintProvider =
-        usesCcWireImage(this.provider) && !usesClaudeCodeProtocol ? "codex" : this.provider;
+        getCcWireImageBuiltins().usesCcWireImage(this.provider) && !usesClaudeCodeProtocol ? "codex" : this.provider;
       const ccRequestDefaults = usesClaudeCodeProtocol
-        ? getClaudeCodeCompatibleRequestDefaults(requestCredentials?.providerSpecificData)
+        ? getRequestDefaults().getClaudeCodeCompatibleRequestDefaults(requestCredentials?.providerSpecificData)
         : {};
       const shouldForwardExtendedContext =
         extendedContext && modelSupportsContext1mBeta(model) && !usesClaudeCodeProtocol;
@@ -913,9 +993,9 @@ export class BaseExecutor {
           // misleading "out of extra usage" placeholder. See Spec E.
           cloakThirdPartyToolNames(tb);
           if (Array.isArray(tb.tools)) {
-            tb.tools = sanitizeClaudeToolSchemas(tb.tools);
+            tb.tools = getSchemaCoercion().sanitizeClaudeToolSchemas(tb.tools);
           }
-          obfuscateInBody(tb);
+          getClaudeCodeObfuscation().obfuscateInBody(tb);
 
           // NOTE (issue #2260): This is the native `claude` provider OAuth path.
           // It is intentionally NOT routed through applyCcBridgeTransformPipeline.
@@ -1010,14 +1090,14 @@ export class BaseExecutor {
             // `auto` means "strip — let the provider decide", so suppress the default
             // adaptive injection. Passthrough/no-config keeps the native Claude Code
             // behavior (adaptive) so #4633 does not regress (request-side only).
-            const tbMode = getThinkingBudgetConfig().mode;
+            const tbMode = getThinkingBudget().getThinkingBudgetConfig().mode;
             if (isHaiku) {
               // Keep tb.thinking — real Claude Desktop keeps thinking enabled for Haiku
               // (issue #2454). Only strip output_config (effort) which Haiku rejects;
               // context_management is re-paired with the preserved thinking below.
               delete tb.output_config;
               delete tb.context_management;
-            } else if (tbMode === ThinkingMode.AUTO) {
+            } else if (tbMode === getThinkingBudget().ThinkingMode.AUTO) {
               delete tb.thinking;
               delete tb.context_management;
               delete tb.output_config;
@@ -1032,7 +1112,7 @@ export class BaseExecutor {
             // When an operator budget (custom/adaptive mode) produced an enabled block
             // upstream, remap it to adaptive + output_config.effort here.
             const th = tb.thinking as Record<string, unknown> | undefined;
-            if (th?.type === "enabled" && tbMode !== ThinkingMode.PASSTHROUGH) {
+            if (th?.type === "enabled" && tbMode !== getThinkingBudget().ThinkingMode.PASSTHROUGH) {
               const b = typeof th.budget_tokens === "number" ? th.budget_tokens : 0;
               tb.thinking = { type: "adaptive" };
               tb.output_config = {
@@ -1126,7 +1206,7 @@ export class BaseExecutor {
           // `inject_billing_header` — billing + sentinel are already
           // prepended above. Users can extend the pipeline via Settings UI.
           {
-            const transformResult = applySystemTransformPipeline(PROVIDER_CLAUDE, tb);
+            const transformResult = getSystemTransforms().applySystemTransformPipeline(getSystemTransforms().PROVIDER_CLAUDE, tb);
             if (transformResult.appliedOpKinds.length > 0) {
               console.log(
                 `[SystemTransforms] claude-native: ${transformResult.appliedOpKinds.join(", ")}`
@@ -1177,7 +1257,7 @@ export class BaseExecutor {
             if (ccKeysLower.has(key.toLowerCase())) delete headers[key];
           }
           Object.assign(headers, ccHeaders);
-          if (usesCcWireImage(this.provider) && usesClaudeCodeProtocol) {
+          if (getCcWireImageBuiltins().usesCcWireImage(this.provider) && usesClaudeCodeProtocol) {
             delete headers["Authorization"];
             headers["x-api-key"] =
               activeCredentials?.apiKey || activeCredentials?.accessToken || "";
@@ -1268,7 +1348,7 @@ export class BaseExecutor {
           contextEditing?.enabled &&
           !contextEditingDisabled
         ) {
-          applyContextEditingToBody(transformedBody as Record<string, unknown>, {
+          getContextEditing().applyContextEditingToBody(transformedBody as Record<string, unknown>, {
             enabled: true,
           });
           log?.debug?.(
@@ -1279,11 +1359,12 @@ export class BaseExecutor {
 
         let bodyString = JSON.stringify(transformedBody);
 
+        const cliFingerprints = getCliFingerprints();
         const shouldFingerprint =
-          isCliCompatEnabled(fingerprintProvider) ||
+          cliFingerprints.isCliCompatEnabled(fingerprintProvider) ||
           (this.provider === "claude" && (isClaudeCodeClient || hasClaudeOAuthToken));
         if (shouldFingerprint) {
-          const fingerprinted = applyFingerprint(fingerprintProvider, headers, transformedBody);
+          const fingerprinted = cliFingerprints.applyFingerprint(fingerprintProvider, headers, transformedBody);
           finalHeaders = fingerprinted.headers;
           bodyString = fingerprinted.bodyString;
         }
@@ -1291,18 +1372,18 @@ export class BaseExecutor {
         // CCH signing — replaces the cch=00000 placeholder in the billing
         // header with an xxHash64 integrity token over the serialized body.
         if (usesClaudeCodeProtocol || this.provider === "claude") {
-          bodyString = await signRequestBody(bodyString);
+          bodyString = await getClaudeCodeCCH().signRequestBody(bodyString);
         }
 
         mergeUpstreamExtraHeaders(finalHeaders, upstreamExtraHeaders);
         if (this.provider === "cline" || this.provider === "clinepass") {
-          applyClineProtocolHeaders(finalHeaders, {
+          getClineAuth().applyClineProtocolHeaders(finalHeaders, {
             taskId: headers["X-Task-ID"],
           });
         }
         // Enforce peer tracing after all configurable headers have been merged so
         // operator/provider metadata cannot accidentally erase the loop guard.
-        applyPeerTraceHeader(finalHeaders, clientHeaders, url);
+        getPeerRouting().applyPeerTraceHeader(finalHeaders, clientHeaders, url);
         const serializedBody = prl.parseBody(bodyString);
         // #4307 — Preserve the non-enumerable tool-name cloak/remap reverse map
         // (`_toolNameMap`, set on the live `transformedBody` by
@@ -1359,7 +1440,7 @@ export class BaseExecutor {
         // aggressive after rapid requests. Enforce a small inter-request gap
         // to avoid tripping it. See open-sse/services/wafRateLimit.ts.
         if (this.provider === "agentrouter") {
-          await gateOutboundRequest(`agentrouter:${url}`);
+          await getWafRateLimit().gateOutboundRequest(`agentrouter:${url}`);
         }
 
         const _fetchStartMs = Date.now();
@@ -1395,7 +1476,7 @@ export class BaseExecutor {
             delete (transformedBody as Record<string, unknown>).context_management;
             let retryBody = JSON.stringify(transformedBody);
             if (usesClaudeCodeProtocol || this.provider === "claude") {
-              retryBody = await signRequestBody(retryBody);
+              retryBody = await getClaudeCodeCCH().signRequestBody(retryBody);
             }
             log?.debug?.(
               "CONTEXT_EDITING",
@@ -1434,7 +1515,7 @@ export class BaseExecutor {
             if (clampNestedThinkingBudget(transformedBody, upstreamMax)) {
               let retryBody = JSON.stringify(transformedBody);
               if (usesClaudeCodeProtocol || this.provider === "claude") {
-                retryBody = await signRequestBody(retryBody);
+                retryBody = await getClaudeCodeCCH().signRequestBody(retryBody);
               }
               log?.info?.(
                 "THINKING_BUDGET",
@@ -1465,7 +1546,7 @@ export class BaseExecutor {
             delete (transformedBody as Record<string, unknown>)[offending];
             let retryBody = JSON.stringify(transformedBody);
             if (usesClaudeCodeProtocol || this.provider === "claude") {
-              retryBody = await signRequestBody(retryBody);
+              retryBody = await getClaudeCodeCCH().signRequestBody(retryBody);
             }
             log?.debug?.(
               "FIELD_400",
@@ -1490,7 +1571,7 @@ export class BaseExecutor {
                   delete (transformedBody as Record<string, unknown>)[autoLearned];
                   let retryBody = JSON.stringify(transformedBody);
                   if (usesClaudeCodeProtocol || this.provider === "claude") {
-                    retryBody = await signRequestBody(retryBody);
+                    retryBody = await getClaudeCodeCCH().signRequestBody(retryBody);
                   }
                   log?.info?.(
                     "AUTO_LEARN",

@@ -23,10 +23,7 @@ import { getAntigravityEnvelopeUserAgent } from "../services/antigravityIdentity
 import { kieExecutor } from "../executors/kie.ts";
 import { mapImageSize } from "../translator/image/sizeMapper.ts";
 import { getCodexClientVersion, getCodexUserAgent } from "../config/codexClient.ts";
-import { ChatGptWebExecutor } from "../executors/chatgpt-web.ts";
 import type { ExecutorLog, ProviderCredentials } from "../executors/base.ts";
-import { getChatGptImage, findChatGptImageBySha256 } from "../services/chatgptImageCache.ts";
-import { createHash } from "node:crypto";
 import { saveCallLog } from "@/lib/usageDb";
 import { sleep } from "../utils/sleep.ts";
 import {
@@ -65,24 +62,15 @@ import { handleIdeogramImageGeneration } from "./imageGeneration/providers/ideog
 import { handleHaiperImageGeneration } from "./imageGeneration/providers/haiper.ts";
 import { handleLeonardoImageGeneration } from "./imageGeneration/providers/leonardo.ts";
 import { handleFreepikImageGeneration } from "./imageGeneration/providers/freepik.ts";
-import {
-  handleChatGptWebImageGeneration,
-  extractMarkdownImageUrls,
-  CHATGPT_WEB_IMAGE_ID_RE,
-} from "./imageGeneration/providers/chatgptWeb.ts";
 import { handleNvidiaNimImageGeneration } from "./imageGeneration/providers/nvidiaNim.ts";
 import { handleSegmindImageGeneration } from "./imageGeneration/providers/segmind.ts";
 import { handleDesignerWebImageGeneration } from "./imageGeneration/providers/designerWeb.ts";
 import { handleMinimaxImageGeneration } from "./imageGeneration/providers/minimax.ts";
-import { handleAdobeFireflyImageGeneration } from "./imageGeneration/providers/adobeFirefly.ts";
 import { handleAlibabaImageGeneration } from "./imageGeneration/providers/alibabaImage.ts";
 import {
   applyPollinationsAnonymousFallback,
   reportPollinationsAnonOutcome,
 } from "./imageGeneration/pollinationsAnonAuth.ts";
-
-// Re-export so /v1/images/edits can dispatch Firefly reference-image edits.
-export { handleAdobeFireflyImageGeneration };
 
 interface KieImageOptions {
   model: string;
@@ -488,14 +476,12 @@ export async function handleImageGeneration({
   }
 
   if (providerConfig.format === "chatgpt-web") {
-    return handleChatGptWebImageGeneration({
-      model,
+    return saveImageErrorResult({
       provider,
-      body,
-      credentials,
-      log,
-      signal,
-      clientHeaders,
+      model,
+      status: 503,
+      startTime: Date.now(),
+      error: "chatgpt-web image generation is not available (browser executor removed)",
     });
   }
 
@@ -511,13 +497,12 @@ export async function handleImageGeneration({
   }
 
   if (providerConfig.format === "adobe-firefly-image") {
-    return handleAdobeFireflyImageGeneration({
-      model,
+    return saveImageErrorResult({
       provider,
-      providerConfig,
-      body,
-      credentials,
-      log,
+      model,
+      status: 503,
+      startTime: Date.now(),
+      error: "adobe-firefly image generation is not available (browser executor removed)",
     });
   }
 
@@ -1269,179 +1254,23 @@ export async function handleOpenAIImageEdit({
 export async function handleImageEdit({
   provider,
   model,
-  body,
-  imageBytes,
-  credentials,
-  log,
-  signal = null,
-  clientHeaders = null,
 }: {
   provider: string;
   model: string;
   body: Record<string, unknown>;
   imageBytes: Buffer;
-  imageMime?: string; // accepted for symmetry with route layer; not used
+  imageMime?: string;
   credentials: ProviderCredentials | null | undefined;
   log: ExecutorLog | null | undefined;
   signal?: AbortSignal | null;
   clientHeaders?: Record<string, string> | null;
 }) {
-  const startTime = Date.now();
-  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-  if (!prompt) {
-    return saveImageErrorResult({
-      provider,
-      model,
-      status: 400,
-      startTime,
-      error: "Prompt is required for image edit",
-    });
-  }
-
-  if (!credentials?.apiKey) {
-    return saveImageErrorResult({
-      provider,
-      model,
-      status: 401,
-      startTime,
-      error: "ChatGPT Web credentials missing session cookie",
-    });
-  }
-
-  const imageHash = createHash("sha256").update(imageBytes).digest("hex");
-  const cached = findChatGptImageBySha256(imageHash);
-
-  const wantsBase64 = body.response_format === "b64_json";
-  const requestBody = {
-    model,
-    prompt: prompt.slice(0, 500),
-    size: body.size || undefined,
-    image_hash: imageHash.slice(0, 16),
-    image_bytes: imageBytes.length,
-    cached_match: Boolean(cached?.entry.context),
-  };
-
-  if (!cached?.entry.context) {
-    // chatgpt-web's image_gen tool can only edit an image when we continue
-    // the original conversation node. If we never generated this image (or
-    // its 30-minute TTL elapsed), there's no node to continue. Return a
-    // clear, actionable error — much better than silently spawning an
-    // unrelated image and confusing the user.
-    log?.warn?.(
-      "IMAGE",
-      `chatgpt-web edit: no cached match for sha256=${imageHash.slice(0, 16)} (bytes=${imageBytes.length}); returning 400`
-    );
-    return saveImageErrorResult({
-      provider,
-      model,
-      status: 400,
-      startTime,
-      error:
-        "chatgpt-web image edit only works for images recently generated through this OmniRoute instance " +
-        "(cache window: 30 minutes). Re-generate the image and try the edit immediately, or disable image-edit " +
-        "in your client to use plain chat-completion edit prompts instead.",
-      requestBody,
-    });
-  }
-
-  // Build a synthetic chat thread that surfaces the cached image URL on
-  // the assistant turn. The executor's parseOpenAIMessages picks up the
-  // URL, findCachedImageContext resolves it to {conversationId,
-  // parentMessageId}, and looksLikeImageEditRequest fires on the user
-  // prompt — together producing a continuation request that actually
-  // edits the saved image.
-  //
-  // The synthetic user prompt is anchored with both an edit verb AND an
-  // image-gen verb so the executor's heuristics fire regardless of what
-  // wording the caller used ("now make it brighter", "tweak this", ...):
-  //   - looksLikeImageEditRequest: matches "edit" + "image" within 120 chars
-  //   - looksLikeImageGenRequest:  matches "generate" + "image" within 40 chars
-  // Either match alone would set forImageGen, but covering both is cheap
-  // insurance for prompts that don't fit common phrasings.
-  const messages: Array<{ role: string; content: string }> = [
-    {
-      role: "assistant",
-      // The base URL is irrelevant — only the path is parsed by
-      // CACHED_IMAGE_URL_RE in the executor's findCachedImageContext.
-      content: `![image](http://internal/v1/chatgpt-web/image/${cached.id})`,
-    },
-    {
-      role: "user",
-      content: `Edit the image and generate the new image: ${prompt}`,
-    },
-  ];
-
-  const executor = new ChatGptWebExecutor();
-  const result = await executor.execute({
-    model,
-    body: { messages },
-    stream: false,
-    credentials,
-    signal,
-    log,
-    clientHeaders,
-  });
-
-  const responseText = await result.response.text();
-  if (result.response.status >= 400) {
-    return saveImageErrorResult({
-      provider,
-      model,
-      status: result.response.status,
-      startTime,
-      error: responseText,
-      requestBody,
-    });
-  }
-
-  let content = "";
-  try {
-    const json = JSON.parse(responseText);
-    content = String(json?.choices?.[0]?.message?.content || "");
-  } catch {
-    content = responseText;
-  }
-
-  const urls = extractMarkdownImageUrls(content);
-  if (urls.length === 0) {
-    return saveImageErrorResult({
-      provider,
-      model,
-      status: 502,
-      startTime,
-      error: `ChatGPT Web edit completed without returning image markdown: ${content.slice(0, 300)}`,
-      requestBody,
-    });
-  }
-
-  const images: Array<{ url?: string; b64_json?: string }> = [];
-  for (const url of urls) {
-    if (!wantsBase64) {
-      images.push({ url });
-      continue;
-    }
-    const id = url.match(CHATGPT_WEB_IMAGE_ID_RE)?.[1];
-    const cachedNew = id ? getChatGptImage(id) : null;
-    if (!cachedNew) {
-      return saveImageErrorResult({
-        provider,
-        model,
-        status: 502,
-        startTime,
-        error: "ChatGPT Web image bytes expired before b64_json conversion",
-        requestBody,
-      });
-    }
-    images.push({ b64_json: cachedNew.bytes.toString("base64") });
-  }
-
-  return saveImageSuccessResult({
+  return saveImageErrorResult({
     provider,
     model,
-    startTime,
-    requestBody,
-    responseBody: { images_count: images.length, edit_match: Boolean(cached?.entry.context) },
-    images,
+    status: 503,
+    startTime: Date.now(),
+    error: "chatgpt-web image edit is not available (browser executor removed)",
   });
 }
 

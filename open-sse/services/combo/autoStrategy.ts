@@ -28,7 +28,6 @@ import type {
   ResolvedComboTarget,
 } from "./types.ts";
 import { extractSessionAffinityKey } from "@/sse/services/auth";
-import { DEFAULT_INTENT_CONFIG, type IntentClassifierConfig } from "../intentClassifier.ts";
 import { getTaskFitness } from "../autoCombo/taskFitness.ts";
 import {
   calculateFactors,
@@ -195,38 +194,13 @@ function toStringArray(input: unknown): string[] {
   return [];
 }
 
+// Intent classification removed for thin gateway — getIntentConfig is kept as a
+// no-op stub for backward compatibility but is no longer called by resolveAutoStrategy.
 export function getIntentConfig(
-  settings: Record<string, unknown> | null | undefined,
-  combo: ComboLike
-): IntentClassifierConfig {
-  const resolvedSettings = settings || {};
-  const comboAutoConfig = combo?.autoConfig || {};
-  const comboConfigAuto = isRecord(combo?.config?.auto) ? combo.config.auto : {};
-  const comboIntentConfig =
-    (isRecord(comboAutoConfig.intentConfig) && comboAutoConfig.intentConfig) ||
-    (isRecord(comboConfigAuto.intentConfig) && comboConfigAuto.intentConfig) ||
-    (isRecord(combo?.config?.intentConfig) && combo.config.intentConfig) ||
-    {};
-
-  return {
-    ...DEFAULT_INTENT_CONFIG,
-    ...comboIntentConfig,
-    ...(typeof resolvedSettings.intentDetectionEnabled === "boolean"
-      ? { enabled: resolvedSettings.intentDetectionEnabled }
-      : {}),
-    ...(Number.isFinite(Number(resolvedSettings.intentSimpleMaxWords))
-      ? { simpleMaxWords: Number(resolvedSettings.intentSimpleMaxWords) }
-      : {}),
-    ...(toStringArray(resolvedSettings.intentExtraCodeKeywords).length > 0
-      ? { extraCodeKeywords: toStringArray(resolvedSettings.intentExtraCodeKeywords) }
-      : {}),
-    ...(toStringArray(resolvedSettings.intentExtraReasoningKeywords).length > 0
-      ? { extraReasoningKeywords: toStringArray(resolvedSettings.intentExtraReasoningKeywords) }
-      : {}),
-    ...(toStringArray(resolvedSettings.intentExtraSimpleKeywords).length > 0
-      ? { extraSimpleKeywords: toStringArray(resolvedSettings.intentExtraSimpleKeywords) }
-      : {}),
-  };
+  _settings: Record<string, unknown> | null | undefined,
+  _combo: ComboLike
+): Record<string, unknown> {
+  return { enabled: false };
 }
 
 export async function applyRequestTagRouting(

@@ -4,8 +4,10 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { getLookupEnv } from "@/shared/services/cliRuntime";
-import { qoderProvider } from "../config/providers/registry/qoder/index.ts";
 import { buildQoderCliNotFoundHint, resolveQoderCliInvocation } from "./qoderCliResolve";
+
+// Stub for deleted qoder provider registry.
+const qoderProvider = { models: [] as Array<{ id: string; name: string }> };
 export { getQoderCliCommand } from "./qoderCliResolve"; // #6263 public entry point
 
 const DEFAULT_TIMEOUT_MS = 45_000;

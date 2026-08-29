@@ -14,7 +14,6 @@ import { buildComplexityRoutingHint } from "../autoCombo/complexityRouter";
 import { getModePack } from "../autoCombo/modePacks.ts";
 import { recordComboIntent } from "../comboMetrics.ts";
 import { estimateTokens } from "../contextManager.ts";
-import { classifyWithConfig } from "../intentClassifier.ts";
 import type { RoutingHint } from "../manifestAdapter";
 import { parseModel } from "../model.ts";
 import { supportsToolCalling } from "../modelCapabilities.ts";
@@ -25,16 +24,10 @@ import {
   getModelContextLimitForModelString,
   providerSupportsEmulatedToolCalling,
 } from "./comboStructure.ts";
-import {
-  calculatePromptCacheAffinityScores,
-  promptCacheTargetIdentity,
-} from "./promptCacheAffinity.ts";
 import type { ResetWindowConfig } from "./quotaScoring.ts";
 import {
   _registerExecutionCandidates,
   expandAutoComboCandidatePool,
-  extractPromptForIntent,
-  getIntentConfig,
   mapIntentToTaskType,
   scoreAutoTargets,
 } from "./autoStrategy.ts";
@@ -210,12 +203,10 @@ export async function resolveAutoStrategyOrder(
     eligibleTargets = await expandAutoComboCandidatePool(eligibleTargets, combo);
   }
 
-  const prompt = extractPromptForIntent(body);
-  const systemPrompt = typeof combo?.system_message === "string" ? combo.system_message : undefined;
-  const intentConfig = getIntentConfig(settings, combo);
-  const intent = classifyWithConfig(prompt, intentConfig, systemPrompt);
+  // Intent classification removed for thin gateway — use default intent.
+  const intent = { type: "simple", confidence: 1, signals: [] } as const;
   recordComboIntent(combo.name, intent);
-  const taskType = mapIntentToTaskType(intent);
+  const taskType = mapIntentToTaskType(intent.type);
 
   const {
     routingStrategy,
@@ -303,9 +294,9 @@ export async function resolveAutoStrategyOrder(
     resetWindowConfig,
     autoCandidateResilienceSettings
   );
-  const cacheAffinityScores = calculatePromptCacheAffinityScores(candidates, body);
+  // Prompt-cache affinity scoring removed for thin gateway — cacheAffinity stays 0.
   for (const candidate of candidates) {
-    candidate.cacheAffinity = cacheAffinityScores.get(promptCacheTargetIdentity(candidate)) ?? 0;
+    candidate.cacheAffinity = 0;
   }
   const routableCandidates = candidates.filter(
     (candidate) => candidate.quotaCutoffBlocked !== true
@@ -445,7 +436,7 @@ export async function resolveAutoStrategyOrder(
 
     log.info(
       "COMBO",
-      `Auto selection: ${selectedTarget?.modelStr || `${selectedProvider}/${selectedModel}`} | intent=${intent} task=${taskType} | strategy=${routingStrategy} | ${selectionReason}`
+      `Auto selection: ${selectedTarget?.modelStr || `${selectedProvider}/${selectedModel}`} | intent=${intent.type} task=${taskType} | strategy=${routingStrategy} | ${selectionReason}`
     );
   } else {
     log.warn("COMBO", "Auto strategy has no candidates, keeping default ordering");

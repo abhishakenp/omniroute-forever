@@ -152,9 +152,9 @@ function maskResponsesOutput(response: JsonRecord) {
   let modified = false;
 
   if (typeof response.output_text === "string") {
-    const result = sanitizePII(response.output_text);
-    if (result.redacted) {
-      response.output_text = result.text;
+    const sanitized = sanitizePII(response.output_text);
+    if (sanitized !== response.output_text) {
+      response.output_text = sanitized;
       modified = true;
     }
   }
@@ -168,9 +168,9 @@ function maskResponsesOutput(response: JsonRecord) {
           if (!part || typeof part !== "object") return part;
           const nextPart = { ...(part as JsonRecord) };
           if (typeof nextPart.text === "string") {
-            const result = sanitizePII(nextPart.text);
-            if (result.redacted) {
-              nextPart.text = result.text;
+            const sanitized = sanitizePII(nextPart.text);
+            if (sanitized !== nextPart.text) {
+              nextPart.text = sanitized;
               modified = true;
             }
           }

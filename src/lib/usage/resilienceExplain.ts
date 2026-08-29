@@ -1,4 +1,4 @@
-import pino from "pino";
+import { createLogger } from "@/shared/utils/logger";
 
 import { isModelExcludedByConnection } from "@/domain/connectionModelRules";
 import { getProviderConnections } from "@/lib/db/providers";
@@ -15,7 +15,7 @@ import type {
 
 type JsonRecord = Record<string, unknown>;
 
-const logger = pino({ name: "resilience-explain" });
+const logger = createLogger("resilience-explain");
 
 export type ProviderConnectionView = JsonRecord & {
   id?: string | null;

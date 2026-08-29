@@ -1,204 +1,117 @@
 /**
- * Structured Logger — Pino-based logger for OmniRoute
- *
- * Usage:
- *   import { logger } from "@/shared/utils/logger";
- *   const log = logger.child({ module: "proxy" });
- *   log.info({ model: "gpt-4o" }, "Request received");
- *   log.error({ err }, "Connection failed");
- *
- * In development, output is pretty-printed via pino-pretty.
- * In production, output is structured JSON for log aggregation.
- *
- * When APP_LOG_TO_FILE is enabled (default: true), logs are also written
- * as JSON lines to the file specified by APP_LOG_FILE_PATH.
+ * Minimal console-based logger — replaces pino + pino-pretty.
+ * Same API surface: logger.info/warn/error/debug/trace + child({ module }).
+ * Saves ~9MB (pino-pretty) + pino overhead.
  */
-import pino from "pino";
-import { resolve } from "path";
-import { getLogConfig, initLogRotation } from "@/lib/logRotation";
-import { getAppLogLevel } from "@/lib/logEnv";
-import { redactLogArgs } from "@/shared/utils/logRedaction";
 
-const isDev = process.env.NODE_ENV !== "production";
+type LogFn = (obj?: unknown, msg?: string, ...args: unknown[]) => void;
 
-const baseConfig: pino.LoggerOptions = {
-  level: getAppLogLevel(isDev ? "debug" : "info"),
-  base: { service: "omniroute" },
-  timestamp: pino.stdTimeFunctions.isoTime,
-  formatters: {
-    level(label: string) {
-      return { level: label };
-    },
-  },
-  // Final defense-in-depth redaction net: runs in the main thread (transport-safe) and
-  // scrubs credentials that slip into any log message/object/error. See logRedaction.ts.
-  hooks: {
-    logMethod(inputArgs: unknown[], method: (...args: unknown[]) => void) {
-      return (method as (...a: unknown[]) => void).apply(this, redactLogArgs(inputArgs));
-    },
-  },
+interface Logger {
+  info: LogFn;
+  warn: LogFn;
+  error: LogFn;
+  debug: LogFn;
+  trace: LogFn;
+  fatal: LogFn;
+  child: (bindings: { module?: string; [k: string]: unknown }) => Logger;
+  level: string;
+}
+
+const LEVELS: Record<string, number> = {
+  trace: 10,
+  debug: 20,
+  info: 30,
+  warn: 40,
+  error: 50,
+  fatal: 60,
 };
 
-function getTransportCompatibleConfig(): pino.LoggerOptions {
-  const { formatters, ...rest } = baseConfig;
-  if (!formatters) return rest;
+const currentLevel = LEVELS[process.env.LOG_LEVEL?.toLowerCase() || (process.env.NODE_ENV === "production" ? "info" : "debug")] ?? LEVELS.info;
 
-  const { level: _levelFormatter, ...safeFormatters } = formatters;
-  return Object.keys(safeFormatters).length > 0 ? { ...rest, formatters: safeFormatters } : rest;
+function formatTime(): string {
+  const d = new Date();
+  return (
+    String(d.getHours()).padStart(2, "0") + ":" +
+    String(d.getMinutes()).padStart(2, "0") + ":" +
+    String(d.getSeconds()).padStart(2, "0") + "." +
+    String(d.getMilliseconds()).padStart(3, "0")
+  );
 }
 
-/**
- * Build a `pino.transport()` worker-thread stream and attach an `error` listener
- * BEFORE handing it to `pino()`.
- *
- * `pino({ transport: {...} })` builds the same stream internally but never listens
- * for its `error` event. A destination that stops existing mid-run (its directory is
- * deleted — e.g. a test's tmp `DATA_DIR` removed in `after()`, or an operator wiping
- * `logs/`) makes the worker's write fail with `ENOENT`; that surfaces as an unlistened
- * `error` event on the main-thread stream, which Node re-throws as an uncaught
- * exception (issue #6360 — "resource generated asynchronous activity after the test
- * ended"). A logger must never crash its host process because its own log file
- * vanished, so failed writes are dropped (best-effort stderr notice) instead of
- * escalating.
- */
-function buildFileTransportStream(targets: NonNullable<pino.TransportMultiOptions["targets"]>) {
-  const stream = pino.transport({ targets });
-  stream.on("error", (err: unknown) => {
-    try {
-      process.stderr.write(
-        `[logger] log transport write failed, dropping log line: ${(err as Error)?.message || err}\n`
+const COLORS: Record<string, string> = {
+  trace: "\x1b[90m",
+  debug: "\x1b[34m",
+  info: "\x1b[32m",
+  warn: "\x1b[33m",
+  error: "\x1b[31m",
+  fatal: "\x1b[31m\x1b[1m",
+};
+const RESET = "\x1b[0m";
+
+function logFn(level: string, moduleTag: string): LogFn {
+  const levelNum = LEVELS[level] ?? 30;
+  if (levelNum < currentLevel) return () => {};
+
+  const color = COLORS[level] || "";
+  const timeStr = () => formatTime();
+
+  return (obj?: unknown, msg?: string, ...args: unknown[]) => {
+    let message = "";
+    let data: unknown = undefined;
+
+    if (typeof obj === "string") {
+      message = obj;
+      if (msg) args = [msg, ...args];
+    } else if (obj && typeof obj === "object") {
+      data = obj;
+      message = msg || "";
+    } else {
+      message = msg || String(obj ?? "");
+    }
+
+    const moduleStr = moduleTag ? `[${moduleTag}]` : "";
+    const prefix = `${color}${timeStr()} ${level.toUpperCase().padEnd(5)}${RESET} ${moduleStr}`;
+
+    if (data && typeof data === "object") {
+      const err = (data as any).err || (data as any).error;
+      if (err instanceof Error) {
+        console[level === "fatal" || level === "error" ? "error" : level === "warn" ? "warn" : "log"](
+          `${prefix} ${message} ${err.message}`,
+        );
+        return;
+      }
+      // Print compact JSON for data
+      const compact = Object.keys(data as object)
+        .filter((k) => k !== "module")
+        .map((k) => `${k}=${(data as any)[k]}`)
+        .join(" ");
+      console[level === "fatal" || level === "error" ? "error" : level === "warn" ? "warn" : "log"](
+        `${prefix} ${message}${compact ? " " + compact : ""}`,
       );
-    } catch {
-      // Nothing more we can do — never let a logging failure crash the process.
+    } else {
+      console[level === "fatal" || level === "error" ? "error" : level === "warn" ? "warn" : "log"](
+        `${prefix} ${message}${args.length ? " " + args.join(" ") : ""}`,
+      );
     }
-  });
-  return stream;
+  };
 }
 
-/**
- * Build the logger with optional file transport.
- * Uses pino transport targets for all destinations.
- */
-function buildLogger(): pino.Logger {
-  const logConfig = getLogConfig();
-  const logLevel = (baseConfig.level as string) || "info";
-  const transportConfig = getTransportCompatibleConfig();
-
-  // If file logging is enabled, set up dual transport (stdout + file)
-  if (logConfig.logToFile) {
-    try {
-      // Initialize log directory and rotation
-      initLogRotation();
-
-      // Resolve to absolute path for pino worker threads
-      const absLogPath = resolve(logConfig.logFilePath);
-
-      if (isDev) {
-        // Dev: pino-pretty → stdout, JSON → file
-        const stream = buildFileTransportStream([
-          {
-            target: "pino-pretty",
-            options: {
-              colorize: true,
-              translateTime: "HH:MM:ss.l",
-              ignore: "pid,hostname,service",
-              messageFormat: "[{module}] {msg}",
-              destination: 1,
-            },
-            level: logLevel,
-          },
-          {
-            target: "pino/file",
-            options: { destination: absLogPath, mkdir: true },
-            level: logLevel,
-          },
-        ]);
-        return pino(transportConfig, stream);
-      }
-
-      // Production: JSON → stdout + JSON → file
-      {
-        const stream = buildFileTransportStream([
-          {
-            target: "pino/file",
-            options: { destination: 1 }, // stdout
-            level: logLevel,
-          },
-          {
-            target: "pino/file",
-            options: { destination: absLogPath, mkdir: true },
-            level: logLevel,
-          },
-        ]);
-        return pino(transportConfig, stream);
-      }
-    } catch (err) {
-      // Log the actual error for diagnostics (issue #165)
-      try {
-        process.stderr.write(
-          `[logger] Failed to set up file transport, attempting sync fallback: ${(err as Error)?.message || err}\n`
-        );
-      } catch {}
-
-      // Fallback: use sync pino.destination() instead of worker-thread transport
-      // pino.transport() uses worker threads which can fail in Next.js production bundles
-      try {
-        const absLogPath = resolve(logConfig.logFilePath);
-        const fileDestination = pino.destination({ dest: absLogPath, mkdir: true, sync: true });
-        fileDestination.on("error", (err: unknown) => {
-          try {
-            process.stderr.write(
-              `[logger] sync log destination write failed, dropping log line: ${(err as Error)?.message || err}\n`
-            );
-          } catch {
-            // Nothing more we can do — never let a logging failure crash the process.
-          }
-        });
-
-        // Production fallback: JSON to both stdout and file via multistream
-        return pino(
-          baseConfig,
-          pino.multistream([
-            { stream: process.stdout, level: logLevel as pino.Level },
-            { stream: fileDestination, level: logLevel as pino.Level },
-          ])
-        );
-      } catch (fallbackErr) {
-        try {
-          process.stderr.write(
-            `[logger] Sync fallback also failed, falling back to console only: ${(fallbackErr as Error)?.message || fallbackErr}\n`
-          );
-        } catch {}
-      }
-    }
-  }
-
-  // Console-only (no file logging)
-  if (isDev) {
-    return pino({
-      ...baseConfig,
-      transport: {
-        target: "pino-pretty",
-        options: {
-          colorize: true,
-          translateTime: "HH:MM:ss.l",
-          ignore: "pid,hostname,service",
-          messageFormat: "[{module}] {msg}",
-        },
-      },
-    });
-  }
-
-  return pino(baseConfig);
+function createLoggerImpl(moduleTag: string): Logger {
+  return {
+    info: logFn("info", moduleTag),
+    warn: logFn("warn", moduleTag),
+    error: logFn("error", moduleTag),
+    debug: logFn("debug", moduleTag),
+    trace: logFn("trace", moduleTag),
+    fatal: logFn("fatal", moduleTag),
+    child: (bindings: { module?: string; [k: string]: unknown }) =>
+      createLoggerImpl(bindings.module || moduleTag),
+    level: "",
+  };
 }
 
-export const logger = buildLogger();
+export const logger: Logger = createLoggerImpl("");
 
-/**
- * Create a child logger with a module tag.
- * @param {string} module - Module name for log context (e.g., "proxy", "db", "sse")
- * @returns {pino.Logger}
- */
-export function createLogger(module: string) {
-  return logger.child({ module });
+export function createLogger(module: string): Logger {
+  return createLoggerImpl(module);
 }

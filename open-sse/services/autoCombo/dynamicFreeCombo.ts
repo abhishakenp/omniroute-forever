@@ -370,7 +370,7 @@ async function getActiveProviders(): Promise<Set<string>> {
     const { getDbInstance } = await import("@/lib/db/core");
     const db = getDbInstance();
     const rows = db
-      .prepare("SELECT DISTINCT provider FROM provider_connections WHERE is_active = 1")
+      .prepare("SELECT DISTINCT provider FROM provider_connections WHERE is_active = 1 AND (test_status IS NULL OR test_status NOT IN ('expired', 'error', 'unavailable', 'credits_exhausted'))")
       .all() as Array<{ provider?: unknown }>;
     const providers = new Set<string>();
     for (const row of rows) {

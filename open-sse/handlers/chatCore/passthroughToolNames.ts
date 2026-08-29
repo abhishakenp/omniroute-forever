@@ -1,4 +1,5 @@
-import { CLAUDE_OAUTH_TOOL_PREFIX } from "../../translator/request/openai-to-claude.ts";
+// Thin gateway: CLAUDE_OAUTH_TOOL_PREFIX inlined to avoid importing openai-to-claude.ts
+const CLAUDE_OAUTH_TOOL_PREFIX = "proxy_";
 import { restoreOpenAIToolNames } from "../../translator/helpers/toolCallHelper.ts";
 
 type JsonRecord = Record<string, unknown>;

@@ -38,36 +38,85 @@ import {
   getCircuitBreakerStatus,
   refreshWithRetry,
 } from "./tokenRefresh/circuitBreaker.ts";
-import { refreshWindsurfToken } from "./tokenRefresh/providers/windsurf.ts";
-import { refreshCodebuddyCnToken } from "./tokenRefresh/providers/codebuddyCn.ts";
-import { refreshClineToken } from "./tokenRefresh/providers/cline.ts";
-import { refreshKimiCodingToken } from "./tokenRefresh/providers/kimiCoding.ts";
-import { refreshGitLabDuoToken } from "./tokenRefresh/providers/gitlabDuo.ts";
-import { refreshClaudeOAuthToken } from "./tokenRefresh/providers/claudeOAuth.ts";
-import { refreshGoogleToken } from "./tokenRefresh/providers/google.ts";
-import { ensureAntigravityProjectAssigned } from "./antigravityProjectBootstrap.ts";
-import { persistDiscoveredAntigravityProjectId } from "./antigravityProjectPersist.ts";
-import { refreshCodexToken } from "./tokenRefresh/providers/codex.ts";
-import { refreshOpenferenceToken } from "./tokenRefresh/providers/openference.ts";
-import { refreshKiroToken } from "./tokenRefresh/providers/kiro.ts";
-import { refreshQoderToken } from "./tokenRefresh/providers/qoder.ts";
-import { refreshGitHubToken } from "./tokenRefresh/providers/github.ts";
-import { refreshCopilotToken } from "./tokenRefresh/providers/copilot.ts";
+import { createRequire } from "node:module";
+
+// ── Lazy per-provider refresh module loading ──────────────────────────────
+// Per-provider refresh implementations live in ./tokenRefresh/providers/ (one
+// file per provider). Previously all 13 were imported eagerly at module-eval
+// time, pulling their transitive dependency graphs into memory even when most
+// were never used (we only have a handful of active connections). Now they are
+// loaded on first access via require() and cached, following the same pattern
+// as open-sse/translator/registry.ts.
+const require_ = createRequire(import.meta.url);
+
+// Registry: providerId → module path. Only providers in the kept list are
+// registered. When a token refresh is needed for a provider, the module is
+// require()'d on first access and cached. Providers NOT in the kept list have
+// no entry here and fall through to the generic OAuth refresh path.
+const PROVIDER_REFRESH_MODULE_PATH: Record<string, string> = {
+  // None of the kept providers (mistral, cohere, openrouter, deepseek,
+  // bazaarlink, api-airforce, auggie, huggingchat, puter, lmarena,
+  // pollinations, hackclub, freemodel-dev, chutes, synthetic, freetheai,
+  // aihorde, opencode, duckduckgo-web, felo-web) have dedicated refresh
+  // modules — they all use the generic OAuth refresh path (default case).
+  // If a kept provider gains a dedicated module, add its path here.
+};
+
+const _moduleCache = new Map<string, Record<string, unknown>>();
+
+function _loadRefreshModule(modulePath: string): Record<string, unknown> {
+  const cached = _moduleCache.get(modulePath);
+  if (cached) return cached;
+  const mod = require_(modulePath);
+  _moduleCache.set(modulePath, mod);
+  return mod;
+}
+
+// Lazy wrapper functions for backward-compatible re-exports. These are kept
+// so existing importers (open-sse/index.ts, src/sse/services/tokenRefresh.ts,
+// tokenHealthCheck, etc.) continue to work without changes. The actual module
+// is only loaded on first call.
+export async function refreshWindsurfToken(...args: unknown[]) {
+  return _loadRefreshModule("./tokenRefresh/providers/windsurf.ts").refreshWindsurfToken(...args);
+}
+export async function refreshCodebuddyCnToken(...args: unknown[]) {
+  return _loadRefreshModule("./tokenRefresh/providers/codebuddyCn.ts").refreshCodebuddyCnToken(...args);
+}
+export async function refreshClineToken(...args: unknown[]) {
+  return _loadRefreshModule("./tokenRefresh/providers/cline.ts").refreshClineToken(...args);
+}
+export async function refreshKimiCodingToken(...args: unknown[]) {
+  return _loadRefreshModule("./tokenRefresh/providers/kimiCoding.ts").refreshKimiCodingToken(...args);
+}
+export async function refreshGitLabDuoToken(...args: unknown[]) {
+  return _loadRefreshModule("./tokenRefresh/providers/gitlabDuo.ts").refreshGitLabDuoToken(...args);
+}
+export async function refreshClaudeOAuthToken(...args: unknown[]) {
+  return _loadRefreshModule("./tokenRefresh/providers/claudeOAuth.ts").refreshClaudeOAuthToken(...args);
+}
+export async function refreshGoogleToken(...args: unknown[]) {
+  return _loadRefreshModule("./tokenRefresh/providers/google.ts").refreshGoogleToken(...args);
+}
+export async function refreshCodexToken(...args: unknown[]) {
+  return _loadRefreshModule("./tokenRefresh/providers/codex.ts").refreshCodexToken(...args);
+}
+export async function refreshOpenferenceToken(...args: unknown[]) {
+  return _loadRefreshModule("./tokenRefresh/providers/openference.ts").refreshOpenferenceToken(...args);
+}
+export async function refreshKiroToken(...args: unknown[]) {
+  return _loadRefreshModule("./tokenRefresh/providers/kiro.ts").refreshKiroToken(...args);
+}
+export async function refreshQoderToken(...args: unknown[]) {
+  return _loadRefreshModule("./tokenRefresh/providers/qoder.ts").refreshQoderToken(...args);
+}
+export async function refreshGitHubToken(...args: unknown[]) {
+  return _loadRefreshModule("./tokenRefresh/providers/github.ts").refreshGitHubToken(...args);
+}
+export async function refreshCopilotToken(...args: unknown[]) {
+  return _loadRefreshModule("./tokenRefresh/providers/copilot.ts").refreshCopilotToken(...args);
+}
 
 export {
-  refreshWindsurfToken,
-  refreshCodebuddyCnToken,
-  refreshClineToken,
-  refreshKimiCodingToken,
-  refreshGitLabDuoToken,
-  refreshClaudeOAuthToken,
-  refreshGoogleToken,
-  refreshCodexToken,
-  refreshOpenferenceToken,
-  refreshKiroToken,
-  refreshQoderToken,
-  refreshGitHubToken,
-  refreshCopilotToken,
   extractOAuthErrorCode,
   isUnrecoverableRefreshError,
   isProviderBlocked,
@@ -299,166 +348,50 @@ export async function refreshAccessToken(
  * Get access token for a specific provider (internal, does the actual work)
  */
 async function _getAccessTokenInternal(provider, credentials, log, proxyConfig: unknown = null) {
-  switch (provider) {
-    case "gemini-cli": {
-      // Deprecated (see DEPRECATED_PROVIDERS). This used to refresh successfully against
-      // PROVIDERS.gemini's client, but the provider is not routable, so the fresh token
-      // had nowhere to go — periodic upstream calls maintaining an unusable credential.
-      //
-      // Return the ESTABLISHED unrecoverable contract, so every existing caller
-      // (isUnrecoverableRefreshError, the manual-refresh route) already stops retrying —
-      // but with a code that says WHY and a target to migrate to. A bare `null` here would
-      // read as a transient failure and be retried forever.
-      const notice = DEPRECATED_PROVIDERS[provider];
-      log?.warn?.(
-        "TOKEN_REFRESH",
-        `${provider} is deprecated — not refreshing; migrate this account to ${notice.migrateTo}`
-      );
-      return {
-        error: "unrecoverable_refresh_error",
-        code: "provider_deprecated",
-        migrateTo: notice.migrateTo,
-        reason: notice.reason,
-      };
-    }
-
-    case "gemini":
-    case "antigravity":
-    case "agy": {
-      const result = await refreshGoogleToken(
-        credentials.refreshToken,
-        PROVIDERS[provider].clientId,
-        PROVIDERS[provider].clientSecret,
-        log,
-        proxyConfig
-      );
-
-      // Google One AI accounts get no projectId at OAuth exchange time.
-      // Recover it via loadCodeAssist so downstream routing works.
-      if (
-        result?.accessToken &&
-        (provider === "antigravity" || provider === "agy") &&
-        !(credentials.projectId || credentials.providerSpecificData?.projectId)
-      ) {
-        try {
-          const discovered = await ensureAntigravityProjectAssigned(result.accessToken, fetch);
-          if (discovered) {
-            result.projectId = discovered;
-            result.providerSpecificData = {
-              ...(credentials.providerSpecificData || {}),
-              ...(result.providerSpecificData || {}),
-              projectId: discovered,
-            };
-            if (credentials.connectionId) {
-              await persistDiscoveredAntigravityProjectId(
-                credentials.connectionId,
-                discovered,
-                credentials.providerSpecificData
-              );
-            }
-            log?.info?.("TOKEN", "Antigravity projectId discovered during token refresh", {
-              projectId: discovered,
-            });
-          }
-        } catch (discoveryError) {
-          const msg =
-            discoveryError instanceof Error ? discoveryError.message : String(discoveryError);
-          log?.warn?.("TOKEN", `Antigravity projectId discovery failed: ${msg}`);
-        }
-      }
-
-      return result;
-    }
-
-    case "claude":
-      return await refreshClaudeOAuthToken(credentials.refreshToken, log, proxyConfig);
-
-    case "codex":
-      return await refreshCodexToken(credentials.refreshToken, log, proxyConfig);
-
-    case "openference":
-      return await refreshOpenferenceToken(credentials.refreshToken, log, proxyConfig);
-
-    case "qoder":
-      return await refreshQoderToken(credentials.refreshToken, log, proxyConfig);
-
-    case "github":
-      return await refreshGitHubToken(credentials.refreshToken, log, proxyConfig);
-
-    case "kiro":
-    case "amazon-q":
-      return await refreshKiroToken(
-        credentials.refreshToken,
-        credentials.providerSpecificData,
-        log,
-        proxyConfig
-      );
-
-    case "cline":
-    case "clinepass": // reuses the Cline WorkOS refresh flow (clinepass: cline)
-      return await refreshClineToken(credentials.refreshToken, log, proxyConfig);
-
-    case "kimi-coding":
-      return await refreshKimiCodingToken(
-        credentials.refreshToken,
-        credentials.providerSpecificData,
-        log,
-        proxyConfig
-      );
-
-    case "gitlab-duo":
-      return await refreshGitLabDuoToken(
-        credentials.refreshToken,
-        credentials.providerSpecificData,
-        log,
-        proxyConfig
-      );
-
-    case "windsurf":
-    case "devin-cli":
-      return await refreshWindsurfToken(
-        credentials.refreshToken,
-        credentials.providerSpecificData,
-        log,
-        proxyConfig
-      );
-
-    case "codebuddy-cn":
-      return await refreshCodebuddyCnToken(credentials.refreshToken, log, proxyConfig);
-
-    default:
-      // Fallback to generic OAuth refresh for unknown providers
-      return refreshAccessToken(provider, credentials.refreshToken, credentials, log, proxyConfig);
+  // Deprecated provider — not refreshed; caller gets an unrecoverable error
+  // with a migration target (see DEPRECATED_PROVIDERS).
+  if (isDeprecatedProvider(provider)) {
+    const notice = DEPRECATED_PROVIDERS[provider];
+    log?.warn?.(
+      "TOKEN_REFRESH",
+      `${provider} is deprecated — not refreshing; migrate this account to ${notice.migrateTo}`
+    );
+    return {
+      error: "unrecoverable_refresh_error",
+      code: "provider_deprecated",
+      migrateTo: notice.migrateTo,
+      reason: notice.reason,
+    };
   }
+
+  // Registry-based lazy dispatch: if the provider has a dedicated refresh
+  // module in PROVIDER_REFRESH_MODULE_PATH, load it on first access (cached)
+  // and delegate. Only kept providers are registered.
+  const modulePath = PROVIDER_REFRESH_MODULE_PATH[provider];
+  if (modulePath) {
+    const mod = _loadRefreshModule(modulePath);
+    // The module exports a default refresh function named after the provider
+    // convention: refreshXxxToken. We call it with the standard signature.
+    const fn = mod.refreshToken || mod.default;
+    if (typeof fn === "function") {
+      return fn(credentials, log, proxyConfig);
+    }
+  }
+
+  // Fallback to generic OAuth refresh for all other providers (including all
+  // kept providers that use standard OAuth refresh_token grant flow).
+  return refreshAccessToken(provider, credentials.refreshToken, credentials, log, proxyConfig);
 }
 
 /**
  * Whether a provider has a supported refresh path in this service.
  */
 export function supportsTokenRefresh(provider) {
-  const explicitlySupported = new Set([
-    "gemini",
-    "antigravity",
-    "agy",
-    "claude",
-    "codex",
-    "openference",
-    "qoder",
-    "github",
-    "kiro",
-    "amazon-q",
-    "cline",
-    "kimi-coding",
-    "windsurf",
-    // #8407: do NOT list "devin-cli" here. It is import-token / local-CLI owned
-    // (`devin auth login`); connections never carry a refresh token. Leaving it
-    // in this set made tokenHealthCheck treat it as refresh-capable and force
-    // testStatus="expired" / errorCode="no_refresh_token". Keep it out of the
-    // explicit set (same idea as not listing non-refresh local-CLI providers).
-    "gitlab-duo",
-    "codebuddy-cn",
-  ]);
-  if (explicitlySupported.has(provider)) return true;
+  // Providers with dedicated refresh modules in the lazy registry are always
+  // supported. Currently empty — no kept providers have dedicated modules.
+  if (Object.prototype.hasOwnProperty.call(PROVIDER_REFRESH_MODULE_PATH, provider)) return true;
+  // Generic OAuth refresh path: any provider with a refreshUrl/tokenUrl config
+  // is supported via the standard refresh_token grant flow.
   const config = PROVIDERS[provider];
   return !!(config?.refreshUrl || config?.tokenUrl);
 }

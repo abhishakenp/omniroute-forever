@@ -245,6 +245,12 @@ export async function getRawProviderConnections(
     conditions.push("auth_type = @authType");
     params.authType = filter.authType;
   }
+  // Thin-gateway optimization: exclude terminal-status connections at SQL level
+  // so the routing hot path doesn't load 170+ dead rows (expired/exhausted/error).
+  // is_active=1 is not sufficient — expired connections keep is_active=1 in practice.
+  if (filter.excludeTerminalStatus) {
+    conditions.push("(test_status IS NULL OR test_status NOT IN ('expired', 'error', 'unavailable', 'credits_exhausted'))");
+  }
 
   if (conditions.length > 0) {
     sql += " WHERE " + conditions.join(" AND ");
@@ -310,6 +316,28 @@ export async function getProviderConnectionById(id: string) {
       ),
       camelRow
     )
+  );
+}
+
+/**
+ * Raw (ciphertext) connection by ID — no decryption. Used by the two-phase
+ * selection path: metadata-only query selects a winner, then this fetches
+ * the full row (with credential fields) for lazy decryption via createLazyRowProxy.
+ */
+export async function getRawProviderConnectionById(
+  id: string
+): Promise<Record<string, unknown> | null> {
+  const db = getDbInstance() as unknown as DbLike;
+  const row = db.prepare("SELECT * FROM provider_connections WHERE id = ?").get(id);
+  if (!row) return null;
+
+  const camelRow = rowToCamel(row);
+  return withNullableRateLimitOverrides(
+    withNullableQuotaWindowThresholds(
+      withNullableMaxConcurrent(cleanNulls(camelRow), camelRow),
+      camelRow
+    ),
+    camelRow
   );
 }
 
