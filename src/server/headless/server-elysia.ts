@@ -11,6 +11,7 @@
 
 import { readdirSync, statSync, existsSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { handleThinGateway } from "./thinGateway.ts";
 
 // ── Load DATA_DIR/.env into process.env (if not already set) ──────────────
 (() => {
@@ -177,9 +178,9 @@ async function loadRouteHandler(route: CompiledRoute): Promise<RouteHandler> {
 
 // ── Concurrency control ─────────────────────────────────────────────────────
 
-const MAX_CONCURRENT = Number(process.env.OMNIROUTE_MAX_CONCURRENT || 8);
-const MAX_CONCURRENT_INTERNAL = Number(process.env.OMNIROUTE_MAX_CONCURRENT_INTERNAL || 8);
-const MAX_QUEUE_DEPTH = Number(process.env.OMNIROUTE_MAX_QUEUE_DEPTH || 100);
+const MAX_CONCURRENT = Number(process.env.OMNIROUTE_MAX_CONCURRENT || 64);
+const MAX_CONCURRENT_INTERNAL = Number(process.env.OMNIROUTE_MAX_CONCURRENT_INTERNAL || 16);
+const MAX_QUEUE_DEPTH = Number(process.env.OMNIROUTE_MAX_QUEUE_DEPTH || 500);
 const QUEUE_TIMEOUT_MS = Number(process.env.OMNIROUTE_QUEUE_TIMEOUT_MS || 30_000);
 const MAX_BODY_BYTES = Number(process.env.OMNIROUTE_MAX_BODY_BYTES || 2 * 1024 * 1024);
 
@@ -256,6 +257,33 @@ async function handleRequest(request: Request): Promise<Response> {
 
   // Health — bypass concurrency control
   if (path === "/health" || path === "/") return healthResponse();
+
+  // Thin gateway — ALL /v1/chat/completions go through the iterator pattern.
+  // No combo routing engine, no in-memory state, no TransformStream buffers.
+  if (path === "/v1/chat/completions" && request.method === "POST") {
+    try {
+      const body = await request.json() as Record<string, unknown>;
+      const model = String(body.model || "auto/best-free");
+      const stream = body.stream === true;
+
+      try {
+        await acquireSlot(isInternalRequest(request));
+      } catch (err) {
+        if (err instanceof QueueRejectedError) {
+          return Response.json({ error: { message: err.message, type: "server_error", code: `queue_${err.reason}` } }, { status: 503, headers: { "Retry-After": "5" } });
+        }
+        throw err;
+      }
+      try {
+        return await handleThinGateway({ body, model, stream, signal: request.signal });
+      } finally {
+        releaseSlot(isInternalRequest(request));
+      }
+    } catch (err) {
+      console.error("[gateway] Thin gateway error:", err);
+      return Response.json({ error: { message: "Gateway error", type: "server_error" } }, { status: 500 });
+    }
+  }
 
   let routePath = path;
   if (!routePath.startsWith("/api/")) routePath = "/api" + routePath;
