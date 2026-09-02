@@ -16,25 +16,21 @@ import { getProviderRegistry } from "../../../open-sse/services/autoCombo/provid
 import { errorResponse } from "../../../open-sse/utils/error.ts";
 import { triggerProviderProvisioning } from "../../sse/services/provisionerHook.ts";
 import { getExecutor, hasSpecializedExecutor } from "../../../open-sse/executors/index.ts";
+import type { RegistryEntry } from "../../../open-sse/config/providers/shared.ts";
 
-const FREE_PROVIDERS = new Set([
-  "mistral",
-  "cohere",
-  "openrouter",
-  "api-airforce",
-  "opencode",
-  "auggie",
-  "duckduckgo-web",
-  "felo-web",
-  "aihorde",
-]);
+// NOTE: a hardcoded FREE_PROVIDERS set used to live here, unreferenced. It was
+// also wrong — it omitted dahl, llm7, uncloseai and bazaarlink, all free and all
+// in active service. The free-provider set is now derived from the provider
+// catalog's `hasFree` flag unioned with the registry's keyless providers; see
+// getFreeProviderIds() in src/lib/db/targetIterator.ts, which TargetIterator
+// applies when `freeProvidersOnly` is set.
 
 // Providers that need custom request formats (not standard OpenAI Bearer auth)
 // and don't yet have a specialized executor registered. Providers WITH
 // specialized executors (auggie, felo-web, duckduckgo-web) are handled via
 // the executor delegation path in tryTarget() below.
 const SKIP_PROVIDERS = new Set([
-  "aihorde",       // needs API key header, not Bearer
+  "aihorde", // needs API key header, not Bearer
 ]);
 
 // Per-target fetch timeout — headers must arrive within this window.
@@ -109,7 +105,9 @@ export async function handleThinGateway(req: GatewayRequest): Promise<Response> 
       }
 
       if (providersToProvision.size > 0) {
-        console.log(`[thin-gateway] All targets exhausted (${attempts} attempts) — triggering provisioner for: ${[...providersToProvision].join(", ")}`);
+        console.log(
+          `[thin-gateway] All targets exhausted (${attempts} attempts) — triggering provisioner for: ${[...providersToProvision].join(", ")}`
+        );
         for (const provider of providersToProvision) {
           triggerProviderProvisioning(provider);
         }
@@ -130,7 +128,9 @@ export async function handleThinGateway(req: GatewayRequest): Promise<Response> 
     }
 
     attempts++;
-    console.log(`[thin-gateway] Attempt ${attempts}: ${target.modelStr} conn=${target.connectionId.slice(0, 8)}`);
+    console.log(
+      `[thin-gateway] Attempt ${attempts}: ${target.modelStr} conn=${target.connectionId.slice(0, 8)}`
+    );
     const result = await tryTarget(target, req, registry);
     if (result.ok) {
       console.log(`[thin-gateway] ✓ ${target.modelStr} succeeded`);
@@ -138,7 +138,9 @@ export async function handleThinGateway(req: GatewayRequest): Promise<Response> 
       return result.response;
     }
 
-    console.log(`[thin-gateway] ✗ ${target.modelStr} failed: ${result.status} ${result.message.slice(0, 80)}`);
+    console.log(
+      `[thin-gateway] ✗ ${target.modelStr} failed: ${result.status} ${result.message.slice(0, 80)}`
+    );
     errors.push({ model: target.modelStr, status: result.status, message: result.message });
     iterator.markFailed(target.connectionId, result.status, RATE_LIMIT_COOLDOWN_MS);
 
@@ -167,7 +169,7 @@ export async function handleThinGateway(req: GatewayRequest): Promise<Response> 
 async function tryTarget(
   target: TargetRow,
   req: GatewayRequest,
-  registry: Record<string, { baseUrl?: string; baseUrls?: string[]; authType?: string }>
+  registry: Record<string, RegistryEntry>
 ): Promise<{ ok: true; response: Response } | { ok: false; status: number; message: string }> {
   // Skip providers that need custom formats
   if (SKIP_PROVIDERS.has(target.provider)) {
@@ -198,7 +200,11 @@ async function tryTarget(
 
   // Skip non-HTTP providers (auggie uses stdio, duckduckgo/felo need custom formats)
   if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
-    return { ok: false, status: 400, message: `Non-HTTP provider: ${target.provider} (${baseUrl})` };
+    return {
+      ok: false,
+      status: 400,
+      message: `Non-HTTP provider: ${target.provider} (${baseUrl})`,
+    };
   }
 
   // Build the upstream URL
@@ -309,6 +315,18 @@ async function tryTarget(
 }
 
 /**
+ * The slice of an executor's `execute()` contract that the thin gateway relies
+ * on. Executors return either a bare Response or a `{ response }` envelope.
+ */
+type ExecutorExecuteFn = (input: {
+  model: string;
+  body: unknown;
+  stream: boolean;
+  credentials: Record<string, unknown>;
+  signal: AbortSignal | null;
+}) => Promise<Response | { response: Response }>;
+
+/**
  * Try a target via a specialized executor (auggie, duckduckgo-web, felo-web, etc.).
  * These providers have custom HTTP/stdio transports that don't fit the standard
  * OpenAI Bearer-auth fetch path. The executor's execute() method handles auth,
@@ -320,7 +338,19 @@ async function tryExecutorTarget(
 ): Promise<{ ok: true; response: Response } | { ok: false; status: number; message: string }> {
   try {
     const executor = getExecutor(target.provider);
-    const result = await executor.execute({
+    // The lazy executor index types `execute` as `unknown` so it never has to
+    // import every executor's signature. Narrow it here — with a runtime guard,
+    // not a blind cast — to the slice of the contract the gateway depends on.
+    const execute = executor.execute as ExecutorExecuteFn | undefined;
+    if (typeof execute !== "function") {
+      return {
+        ok: false,
+        status: 500,
+        message: `Executor for ${target.provider} exposes no execute()`,
+      };
+    }
+
+    const result = await execute.call(executor, {
       model: target.modelId,
       body: req.body,
       stream: req.stream,
@@ -328,9 +358,8 @@ async function tryExecutorTarget(
       signal: req.signal ?? null,
     });
 
-    // ExecutorExecuteResult is either a bare Response or { response, ... }
-    const response: Response =
-      result instanceof Response ? result : (result as { response: Response }).response;
+    // The executor returns either a bare Response or { response, ... }.
+    const response: Response = result instanceof Response ? result : result.response;
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
@@ -351,4 +380,3 @@ async function tryExecutorTarget(
     };
   }
 }
-

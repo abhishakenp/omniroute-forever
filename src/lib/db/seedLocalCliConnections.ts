@@ -29,6 +29,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { getDbInstance } from "./core.ts";
+import { reviveCooldownlessSoftFailures } from "./targetIterator.ts";
 import { resolveAuggieBin } from "@omniroute/open-sse/executors/auggie";
 
 interface LocalCliProvider {
@@ -80,6 +81,19 @@ export function seedLocalCliConnections(): void {
   } catch (err) {
     console.warn("[seed-local-cli] DB unavailable — skipping:", err);
     return;
+  }
+
+  // Give cooldown-less soft failures a path back into service before anything
+  // else runs — see reviveCooldownlessSoftFailures().
+  try {
+    const revived = reviveCooldownlessSoftFailures(db);
+    if (revived > 0) {
+      console.log(
+        `[seed-local-cli] revived ${revived} cooldown-less soft-failure connection(s) — they will be retried once their backoff elapses`
+      );
+    }
+  } catch (err) {
+    console.warn("[seed-local-cli] soft-failure revival failed:", err);
   }
 
   for (const spec of LOCAL_CLI_PROVIDERS) {
