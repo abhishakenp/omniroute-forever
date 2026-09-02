@@ -14,8 +14,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const { AuggieExecutor, buildAuggiePrompt, resolveAuggieBin, resolveAuggieModel } =
-  await import("@omniroute/open-sse/executors/auggie");
+const {
+  AuggieExecutor,
+  buildAuggiePrompt,
+  resolveAuggieBin,
+  resolveAuggieModel,
+  classifyAuggieOutput,
+} = await import("@omniroute/open-sse/executors/auggie");
 
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-auggie-test-"));
 
@@ -409,6 +414,13 @@ test("execute() aborts a long-running CLI process instead of hanging (streaming)
   try {
     const executor = new AuggieExecutor();
     const controller = new AbortController();
+    // The streaming path buffers the head of stdout before it commits to an
+    // HTTP status (see classifyAuggieOutput: an out-of-credits banner has to
+    // become a 402, and that is impossible once a 200 SSE has been returned).
+    // execute() therefore resolves on first output rather than immediately, so
+    // the abort has to be fired concurrently instead of after the await.
+    const start = Date.now();
+    setTimeout(() => controller.abort(), 100).unref?.();
     const { response } = await executor.execute({
       model: "sonnet4.6",
       body: { messages: [{ role: "user", content: "hi" }] },
@@ -416,13 +428,9 @@ test("execute() aborts a long-running CLI process instead of hanging (streaming)
       credentials: {} as never,
       signal: controller.signal,
     });
-    // Give the child process a beat to spawn, then abort.
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    controller.abort();
 
-    // Reading the stream must resolve promptly (i.e. the stream closes) rather
-    // than hanging for the full 30s sleep.
-    const start = Date.now();
+    // Both the handoff and the stream must resolve promptly (i.e. the child is
+    // killed and the stream closes) rather than hanging for the full 30s sleep.
     await response.text();
     const elapsed = Date.now() - start;
     assert.ok(elapsed < 5000, `expected abort to close the stream quickly, took ${elapsed}ms`);
@@ -540,5 +548,108 @@ test("initAuggieModels failure does not block execute() for a known model", asyn
     if (prevBin === undefined) delete process.env.AUGGIE_BIN;
     else process.env.AUGGIE_BIN = prevBin;
     __resetAuggieModels();
+  }
+});
+
+// ─── Account-state detection (out of credits / logged out) ───────────────────
+// The Augment CLI reports an exhausted account by printing a banner on STDOUT
+// and exiting 0. Before this was detected, the executor wrapped that banner as
+// a normal assistant message with HTTP 200 — the router logged a SUCCESS and
+// never failed over, so the caller received the credit warning as their answer.
+
+const CREDIT_BANNER =
+  "⚠️ **You have run out of credits for user@example.com. " +
+  "Please visit https://app.augmentcode.com/account to upgrade.** ⚠️";
+
+test("classifyAuggieOutput flags an out-of-credits banner as 402", () => {
+  const verdict = classifyAuggieOutput(`${CREDIT_BANNER}\n\nRequest ID: abc`);
+  assert.equal(verdict?.status, 402);
+  assert.match(String(verdict?.message), /out of credits/i);
+});
+
+test("classifyAuggieOutput flags a logged-out CLI as 401", () => {
+  const verdict = classifyAuggieOutput("Error: you are not logged in. Run `auggie login`.");
+  assert.equal(verdict?.status, 401);
+});
+
+test("classifyAuggieOutput leaves an ordinary answer alone", () => {
+  assert.equal(classifyAuggieOutput("The capital of France is Paris."), null);
+  assert.equal(classifyAuggieOutput(""), null);
+});
+
+test("execute() returns 402 (not a fake 200) when the account is out of credits", async () => {
+  const bin = writeFakeBin(
+    "fake-auggie-nocredits.sh",
+    `cat > /dev/null\necho '${CREDIT_BANNER}'\nexit 0`
+  );
+  const prevBin = process.env.AUGGIE_BIN;
+  process.env.AUGGIE_BIN = bin;
+  try {
+    const executor = new AuggieExecutor();
+    const { response } = await executor.execute({
+      model: "sonnet4.6",
+      body: { messages: [{ role: "user", content: "hi" }] },
+      stream: false,
+      credentials: {} as never,
+      signal: null,
+    });
+    assert.equal(response.status, 402, "an exhausted account must surface as a real HTTP failure");
+    const text = await response.text();
+    assert.ok(!text.includes('"role":"assistant"'), "banner must not be returned as an answer");
+  } finally {
+    if (prevBin === undefined) delete process.env.AUGGIE_BIN;
+    else process.env.AUGGIE_BIN = prevBin;
+  }
+});
+
+test("execute() returns 402 on the STREAMING path too (status must precede the SSE body)", async () => {
+  const bin = writeFakeBin(
+    "fake-auggie-nocredits-sse.sh",
+    `cat > /dev/null\necho '${CREDIT_BANNER}'\nexit 0`
+  );
+  const prevBin = process.env.AUGGIE_BIN;
+  process.env.AUGGIE_BIN = bin;
+  try {
+    const executor = new AuggieExecutor();
+    const { response } = await executor.execute({
+      model: "sonnet4.6",
+      body: { messages: [{ role: "user", content: "hi" }] },
+      stream: true,
+      credentials: {} as never,
+      signal: null,
+    });
+    assert.equal(response.status, 402, "must not hand back a 200 text/event-stream");
+    const text = await response.text();
+    assert.ok(!text.includes("chat.completion.chunk"), "banner must not leak as an SSE delta");
+  } finally {
+    if (prevBin === undefined) delete process.env.AUGGIE_BIN;
+    else process.env.AUGGIE_BIN = prevBin;
+  }
+});
+
+test("execute() still streams a healthy account's answer through unchanged", async () => {
+  const bin = writeFakeBin(
+    "fake-auggie-healthy.sh",
+    "cat > /dev/null\necho 'all good here'\nexit 0"
+  );
+  const prevBin = process.env.AUGGIE_BIN;
+  process.env.AUGGIE_BIN = bin;
+  try {
+    const executor = new AuggieExecutor();
+    const { response } = await executor.execute({
+      model: "sonnet4.6",
+      body: { messages: [{ role: "user", content: "hi" }] },
+      stream: true,
+      credentials: {} as never,
+      signal: null,
+    });
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.ok(text.includes("all good here"), "buffered prefix must be replayed to the stream");
+    assert.ok(text.includes('"finish_reason":"stop"'));
+    assert.ok(text.includes("data: [DONE]"));
+  } finally {
+    if (prevBin === undefined) delete process.env.AUGGIE_BIN;
+    else process.env.AUGGIE_BIN = prevBin;
   }
 });

@@ -169,32 +169,60 @@ export class TargetIterator {
     }
 
     // No more connection-based targets — try no-auth providers from the registry.
-    // Skip this for direct provider/model requests (specificProvider set).
-    if (!this.specificProvider) {
-      const registry = getProviderRegistry();
-      for (const [providerId, entry] of Object.entries(registry)) {
-        if (this.excludedProviders.has(providerId)) continue;
-        if (entry.authType !== "none" && entry.noAuth !== true) continue;
-        if (!entry.models || !Array.isArray(entry.models)) continue;
+    // For direct provider/model requests (specificProvider set), only check that
+    // specific provider if it's a no-auth provider with no DB connection.
+    const registry = getProviderRegistry();
+    const noAuthEntries = this.specificProvider
+      ? Object.entries(registry).filter(([id]) => id === this.specificProvider)
+      : Object.entries(registry);
 
-        for (const model of entry.models.slice(0, 3)) {
-          const modelId = typeof model?.id === "string" ? model.id : "";
-          if (!modelId) continue;
-          const key = `${providerId}:${modelId}`;
-          if (this.triedProviderModels.has(key)) continue;
-          this.triedProviderModels.add(key);
+    // A provider that owns connection rows is governed by those rows' health.
+    // If every one of its rows is quarantined (401 → 'error', 402 →
+    // 'credits_exhausted') or still cooling down, do NOT resurrect it here —
+    // the registry no-auth fallback would otherwise bypass the quarantine and
+    // keep hammering a credential/CLI we already know is dead.
+    const quarantinedProviders = new Set(
+      (
+        this.db
+          .prepare(
+            `SELECT provider FROM provider_connections
+              GROUP BY provider
+              HAVING SUM(
+                CASE WHEN is_active = 1
+                      AND (test_status IS NULL OR test_status NOT IN ('expired', 'error', 'unavailable', 'credits_exhausted'))
+                      AND (rate_limited_until IS NULL OR rate_limited_until < ?)
+                     THEN 1 ELSE 0 END
+              ) = 0`
+          )
+          .all(now) as Array<{ provider: string }>
+      ).map((r) => r.provider)
+    );
 
-          return {
-            connectionId: `noauth-${providerId}`,
-            provider: providerId,
-            modelId,
-            modelStr: `${providerId}/${modelId}`,
-            apiKey: null,
-            authType: "none",
-            defaultModel: null,
-            priority: -1, // no-auth providers are lower priority
-          };
-        }
+    for (const [providerId, entry] of noAuthEntries) {
+      if (this.excludedProviders.has(providerId)) continue;
+      if (quarantinedProviders.has(providerId)) continue;
+      if (entry.authType !== "none" && entry.noAuth !== true) continue;
+      if (!entry.models || !Array.isArray(entry.models)) continue;
+
+      for (const model of entry.models.slice(0, 3)) {
+        const modelId = typeof model?.id === "string" ? model.id : "";
+        if (!modelId) continue;
+        // For specific provider requests, filter to the requested model
+        if (this.specificModel && modelId !== this.specificModel) continue;
+        const key = `${providerId}:${modelId}`;
+        if (this.triedProviderModels.has(key)) continue;
+        this.triedProviderModels.add(key);
+
+        return {
+          connectionId: `noauth-${providerId}`,
+          provider: providerId,
+          modelId,
+          modelStr: `${providerId}/${modelId}`,
+          apiKey: null,
+          authType: "none",
+          defaultModel: null,
+          priority: -1, // no-auth providers are lower priority
+        };
       }
     }
 

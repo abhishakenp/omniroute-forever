@@ -15,6 +15,7 @@ import { TargetIterator, type TargetRow } from "../../lib/db/targetIterator.ts";
 import { getProviderRegistry } from "../../../open-sse/services/autoCombo/providerRegistryAccessor.ts";
 import { errorResponse } from "../../../open-sse/utils/error.ts";
 import { triggerProviderProvisioning } from "../../sse/services/provisionerHook.ts";
+import { getExecutor, hasSpecializedExecutor } from "../../../open-sse/executors/index.ts";
 
 const FREE_PROVIDERS = new Set([
   "mistral",
@@ -29,12 +30,10 @@ const FREE_PROVIDERS = new Set([
 ]);
 
 // Providers that need custom request formats (not standard OpenAI Bearer auth)
-// — skip them in the thin gateway. They'll be handled by specialized executors
-// if needed, or added back later with proper format support.
+// and don't yet have a specialized executor registered. Providers WITH
+// specialized executors (auggie, felo-web, duckduckgo-web) are handled via
+// the executor delegation path in tryTarget() below.
 const SKIP_PROVIDERS = new Set([
-  "auggie",        // stdio transport, not HTTP
-  "felo-web",      // not OpenAI-compatible
-  "duckduckgo-web", // needs custom auth (x-vqd-4 header)
   "aihorde",       // needs API key header, not Bearer
 ]);
 
@@ -175,7 +174,19 @@ async function tryTarget(
     return { ok: false, status: 400, message: `Skipped provider: ${target.provider}` };
   }
 
-  const providerEntry = registry[target.provider];
+  // ── Executor delegation path ────────────────────────────────────────
+  // Providers with specialized executors (auggie, duckduckgo-web, felo-web, etc.)
+  // have custom HTTP/stdio transports that don't fit the standard OpenAI
+  // Bearer-auth fetch. Delegate to the executor's execute() method instead.
+  // BUT: if the registry explicitly says executor="default", use the standard
+  // fetch path (some providers like pollinations have a legacy executor that's
+  // broken but their API is now plain OpenAI-compatible).
+  const registryEntry = registry[target.provider];
+  if (registryEntry?.executor !== "default" && hasSpecializedExecutor(target.provider)) {
+    return await tryExecutorTarget(target, req);
+  }
+
+  const providerEntry = registryEntry;
   if (!providerEntry) {
     return { ok: false, status: 400, message: `Unknown provider: ${target.provider}` };
   }
@@ -215,7 +226,17 @@ async function tryTarget(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  if (target.apiKey && providerEntry.authType !== "none") {
+  // For "optional" authType, skip Authorization — use keyless access.
+  // For "apikey" authType, send Bearer token (or X-API-Key if authHeader specifies it).
+  // For "none" authType, never send Authorization.
+  if (target.apiKey && providerEntry.authType === "apikey") {
+    if (providerEntry.authHeader === "x-api-key") {
+      headers["X-API-Key"] = target.apiKey;
+    } else {
+      headers["Authorization"] = `Bearer ${target.apiKey}`;
+    }
+  } else if (target.apiKey && !providerEntry.authType && providerEntry.authType !== "none") {
+    // Default: send Bearer if authType is undefined (backwards compat)
     headers["Authorization"] = `Bearer ${target.apiKey}`;
   }
 
@@ -286,3 +307,48 @@ async function tryTarget(
     };
   }
 }
+
+/**
+ * Try a target via a specialized executor (auggie, duckduckgo-web, felo-web, etc.).
+ * These providers have custom HTTP/stdio transports that don't fit the standard
+ * OpenAI Bearer-auth fetch path. The executor's execute() method handles auth,
+ * request formatting, and response translation to OpenAI format.
+ */
+async function tryExecutorTarget(
+  target: TargetRow,
+  req: GatewayRequest
+): Promise<{ ok: true; response: Response } | { ok: false; status: number; message: string }> {
+  try {
+    const executor = getExecutor(target.provider);
+    const result = await executor.execute({
+      model: target.modelId,
+      body: req.body,
+      stream: req.stream,
+      credentials: {},
+      signal: req.signal ?? null,
+    });
+
+    // ExecutorExecuteResult is either a bare Response or { response, ... }
+    const response: Response =
+      result instanceof Response ? result : (result as { response: Response }).response;
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      return {
+        ok: false,
+        status: response.status,
+        message: errorText.slice(0, 200) || `HTTP ${response.status}`,
+      };
+    }
+
+    return { ok: true, response };
+  } catch (err) {
+    const status = (err as Error & { status?: number }).status ?? 502;
+    return {
+      ok: false,
+      status,
+      message: err instanceof Error ? err.message.slice(0, 200) : "Executor failed",
+    };
+  }
+}
+

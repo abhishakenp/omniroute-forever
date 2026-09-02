@@ -33,6 +33,185 @@ import { auggieProvider } from "../config/providers/registry/auggie/index.ts";
 
 const AUGGIE_URL = "auggie://cli/stdio";
 
+// ─── Account-state detection (failover correctness) ──────────────────────────
+// The Augment CLI reports an account-level failure by printing a banner on
+// STDOUT and exiting 0 — nothing on stderr, no non-zero exit code, e.g.:
+//
+//   ⚠️ **You have run out of credits for you@example.com. Please visit
+//   https://app.augmentcode.com/account to upgrade.** ⚠️
+//
+// Without detection the executor wraps that banner as a normal assistant
+// message with HTTP 200, so the router records a SUCCESS and never fails over
+// to another connection — the caller gets the credit warning as their answer.
+// Classifying it as a real HTTP status lets TargetIterator.markFailed() mark
+// the connection (402 → `credits_exhausted`, 401 → `error`) and the gateway
+// move on to the next target.
+const AUGGIE_CREDITS_EXHAUSTED_RE =
+  /run out of credits|out of credits|no credits (?:remaining|left)|insufficient credits|credit balance is too low|upgrade (?:your|to a) (?:plan|paid)/i;
+const AUGGIE_AUTH_REQUIRED_RE =
+  /auggie login|not logged in|not authenticated|authentication (?:required|failed)|session (?:has )?expired|unauthorized/i;
+
+/** How many bytes of stdout to inspect before committing to a streaming 200. */
+const AUGGIE_GATE_BYTES = 512;
+/**
+ * Backstop for the streaming account-state gate. Auggie is slow to first byte
+ * (~8-20s: node startup + workspace sync), so the gate cannot be short — but it
+ * must not be unbounded either, or a wedged CLI would hold the request open
+ * forever. On expiry we give up on classification and open the stream normally.
+ */
+const AUGGIE_GATE_TIMEOUT_MS = 30_000;
+
+/**
+ * Classify a chunk of auggie stdout as an account-level failure.
+ * Returns null when the output looks like an ordinary model response.
+ */
+export function classifyAuggieOutput(text: string): { status: number; message: string } | null {
+  if (!text) return null;
+  const head = text.slice(0, 1000);
+  const summary =
+    head
+      .split("\n")
+      .find((l) => l.trim().length > 0)
+      ?.trim()
+      .slice(0, 200) ?? "";
+  if (AUGGIE_CREDITS_EXHAUSTED_RE.test(head)) {
+    return { status: 402, message: `Augment account is out of credits: ${summary}` };
+  }
+  if (AUGGIE_AUTH_REQUIRED_RE.test(head)) {
+    return { status: 401, message: `Augment CLI is not authenticated: ${summary}` };
+  }
+  return null;
+}
+
+interface AuggieSink {
+  onData: (chunk: string) => void;
+  onClose: (code: number | null, stderrTail: string) => void;
+  onError: (message: string) => void;
+}
+
+interface AuggieGate {
+  /** stdout buffered before the gate fired. */
+  readonly prefix: string;
+  readonly closed: boolean;
+  readonly exitCode: number | null;
+  readonly stderrTail: string;
+  readonly spawnError: string | null;
+  /** Hand the buffered output and all future events to a live consumer. */
+  attach: (sink: AuggieSink) => void;
+}
+
+/**
+ * Attach to a freshly spawned auggie child and resolve once we have either
+ * AUGGIE_GATE_BYTES of stdout, a close, or a spawn error — whichever is first.
+ * The returned gate keeps buffering until `attach()` hands over to a consumer,
+ * so no output is lost between the gate firing and the SSE stream starting.
+ */
+function readAuggieGate(
+  child: ReturnType<typeof spawn>,
+  signal: AbortSignal | null | undefined
+): Promise<AuggieGate> {
+  let buffered = "";
+  let stderrTail = "";
+  let closed = false;
+  let exitCode: number | null = null;
+  let spawnError: string | null = null;
+  let sink: AuggieSink | null = null;
+  let settle: (() => void) | null = null;
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const fire = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    const s = settle;
+    settle = null;
+    s?.();
+  };
+
+  child.stdout?.on("data", (chunk: Buffer) => {
+    const text = chunk.toString("utf8");
+    if (sink) {
+      sink.onData(text);
+      return;
+    }
+    buffered += text;
+    if (buffered.length >= AUGGIE_GATE_BYTES) fire();
+  });
+
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderrTail = (stderrTail + chunk.toString("utf8")).slice(-2000);
+  });
+
+  child.on("error", (err: NodeJS.ErrnoException) => {
+    const message = err?.message || String(err);
+    if (sink) {
+      sink.onError(message);
+      return;
+    }
+    spawnError = message;
+    fire();
+  });
+
+  child.on("close", (code) => {
+    closed = true;
+    exitCode = code;
+    if (sink) {
+      sink.onClose(code, stderrTail);
+      return;
+    }
+    fire();
+  });
+
+  if (signal) {
+    const onAbort = () => {
+      if (!child.killed) child.kill("SIGTERM");
+      fire();
+    };
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  const gate: AuggieGate = {
+    get prefix() {
+      return buffered;
+    },
+    get closed() {
+      return closed;
+    },
+    get exitCode() {
+      return exitCode;
+    },
+    get stderrTail() {
+      return stderrTail;
+    },
+    get spawnError() {
+      return spawnError;
+    },
+    attach(next: AuggieSink) {
+      sink = next;
+      if (buffered) {
+        const pending = buffered;
+        buffered = "";
+        next.onData(pending);
+      }
+      if (spawnError) next.onError(spawnError);
+      else if (closed) next.onClose(exitCode, stderrTail);
+    },
+  };
+
+  return new Promise<AuggieGate>((resolve) => {
+    if (closed || spawnError || buffered.length >= AUGGIE_GATE_BYTES) {
+      resolve(gate);
+      return;
+    }
+    settle = () => resolve(gate);
+    timer = setTimeout(fire, AUGGIE_GATE_TIMEOUT_MS);
+    // Don't keep the event loop alive just for the backstop.
+    (timer as unknown as { unref?: () => void }).unref?.();
+  });
+}
+
 // ─── Model allowlist (argument-injection defense) ─────────────────────────────
 // The `model` value is forwarded straight into the `auggie` argv, so it is an
 // untrusted-input sink. We only ever pass a model that is declared in the
@@ -411,7 +590,7 @@ export class AuggieExecutor extends BaseExecutor {
     );
 
     const response = wantsStream
-      ? this.runStreaming(auggieBin, safeModel, promptText, signal, log)
+      ? await this.runStreaming(auggieBin, safeModel, promptText, signal, log)
       : await this.runNonStreaming(auggieBin, safeModel, promptText, signal, log);
 
     return {
@@ -446,29 +625,73 @@ export class AuggieExecutor extends BaseExecutor {
     return child;
   }
 
-  private runStreaming(
+  private async runStreaming(
     auggieBin: string,
     model: string,
     promptText: string,
     signal: AbortSignal | null | undefined,
     log: ExecuteInput["log"]
-  ): Response {
+  ): Promise<Response> {
     const responseId = `chatcmpl-auggie-${Date.now()}`;
     const created = Math.floor(Date.now() / 1000);
+
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = this.spawnAuggie(auggieBin, model, promptText);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return buildAuggieSseError(
+        isEnoentLike(message) ? cliNotFoundMessage(auggieBin) : sanitizeErrorMessage(message)
+      );
+    }
+
+    // ── Account-state gate (see classifyAuggieOutput) ───────────────────────
+    // Buffer the head of stdout BEFORE opening the SSE stream. Once a 200
+    // text/event-stream Response is handed back the status is locked in and the
+    // router can no longer fail over — an out-of-credits banner would be
+    // streamed to the caller as if it were the model's answer. Auggie emits the
+    // banner as the very first thing it writes, so a short prefix is enough to
+    // tell "account is dead" from "model is answering".
+    const gate = await readAuggieGate(child, signal);
+
+    if (gate.spawnError) {
+      return buildAuggieSseError(
+        isEnoentLike(gate.spawnError)
+          ? cliNotFoundMessage(auggieBin)
+          : sanitizeErrorMessage(gate.spawnError)
+      );
+    }
+
+    const accountFailure = classifyAuggieOutput(gate.prefix);
+    if (accountFailure) {
+      if (!child.killed) child.kill("SIGTERM");
+      log?.warn?.("AUGGIE", accountFailure.message);
+      return errorResponse(accountFailure.status, sanitizeErrorMessage(accountFailure.message));
+    }
+
+    if (gate.closed && gate.exitCode !== 0) {
+      return buildAuggieSseError(
+        sanitizeErrorMessage(
+          `Auggie CLI exited with code ${gate.exitCode}${
+            gate.stderrTail ? `: ${gate.stderrTail}` : ""
+          }`
+        )
+      );
+    }
 
     const sseStream = new ReadableStream<Uint8Array>({
       start(controller) {
         const enc = new TextEncoder();
         const emit = (data: string) => controller.enqueue(enc.encode(data));
-        let closed = false;
+        let streamClosed = false;
         let roleEmitted = false;
         let finished = false;
 
         const finish = () => {
           if (finished) return;
           finished = true;
-          if (!closed) {
-            closed = true;
+          if (!streamClosed) {
+            streamClosed = true;
             try {
               controller.close();
             } catch {
@@ -479,6 +702,7 @@ export class AuggieExecutor extends BaseExecutor {
 
         const emitDelta = (delta: string) => {
           if (!delta) return;
+          if (finished) return;
           if (!roleEmitted) {
             emit(
               `data: ${JSON.stringify({
@@ -505,12 +729,14 @@ export class AuggieExecutor extends BaseExecutor {
         };
 
         const emitError = (message: string) => {
+          if (finished) return;
           emit(`data: ${JSON.stringify(buildErrorBody(502, message))}\n\n`);
           emit("data: [DONE]\n\n");
           finish();
         };
 
         const emitStop = () => {
+          if (finished) return;
           emit(
             `data: ${JSON.stringify({
               id: responseId,
@@ -524,74 +750,45 @@ export class AuggieExecutor extends BaseExecutor {
           finish();
         };
 
-        let child: ReturnType<typeof spawn>;
-        try {
-          // `shell: true` on win32 only (see buildAuggieSpawnOptions() for why).
-          // `model` is already allowlist-validated upstream, so shell interpretation
-          // does not reopen argument-injection.
-          child = spawn(
-            auggieBin,
-            buildAuggieArgs(model),
-            buildAuggieSpawnOptions(["pipe", "pipe", "pipe"])
-          );
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          emitError(
-            isEnoentLike(message) ? cliNotFoundMessage(auggieBin) : sanitizeErrorMessage(message)
-          );
-          return;
-        }
-
-        // Async EPIPE lands as an 'error' event on stdin, not a sync throw (see
-        // spawnAuggie) — handle it so a fast-exiting CLI can't crash the stream.
-        child.stdin.on("error", () => {});
-        try {
-          child.stdin.write(promptText);
-          child.stdin.end();
-        } catch {
-          /* ignore — error/close handlers below surface failures */
-        }
-
         if (signal) {
+          // The gate above already awaited, so the request may have been
+          // aborted before this stream ever opened — an 'abort' listener would
+          // never fire for that and the stream would hang open forever.
+          if (signal.aborted) {
+            if (!child.killed) child.kill("SIGTERM");
+            finish();
+            return;
+          }
           signal.addEventListener("abort", () => {
             if (!child.killed) child.kill("SIGTERM");
             finish();
           });
         }
 
-        child.on("error", (err: NodeJS.ErrnoException) => {
-          const message = err?.message || String(err);
-          emitError(
-            isEnoentLike(message) ? cliNotFoundMessage(auggieBin) : sanitizeErrorMessage(message)
-          );
-        });
-
-        let stderrTail = "";
-        child.stdout?.on("data", (chunk: Buffer) => {
-          emitDelta(chunk.toString("utf8"));
-        });
-
-        child.stderr?.on("data", (chunk: Buffer) => {
-          stderrTail = (stderrTail + chunk.toString("utf8")).slice(-2000);
-          log?.debug?.("AUGGIE", `stderr: ${chunk.toString("utf8").slice(0, 200)}`);
-        });
-
-        child.on("close", (code) => {
-          if (finished) return;
-          if (code !== 0) {
+        // Hand the buffered prefix and the live child over to the SSE consumer.
+        gate.attach({
+          onData: (text) => emitDelta(text),
+          onClose: (code, stderrTail) => {
+            if (code !== 0) {
+              emitError(
+                sanitizeErrorMessage(
+                  `Auggie CLI exited with code ${code}${stderrTail ? `: ${stderrTail}` : ""}`
+                )
+              );
+              return;
+            }
+            emitStop();
+          },
+          onError: (message) =>
             emitError(
-              sanitizeErrorMessage(
-                `Auggie CLI exited with code ${code}${stderrTail ? `: ${stderrTail}` : ""}`
-              )
-            );
-            return;
-          }
-          emitStop();
+              isEnoentLike(message) ? cliNotFoundMessage(auggieBin) : sanitizeErrorMessage(message)
+            ),
         });
       },
       cancel() {
-        // Stream cancelled by the consumer — nothing extra to clean up here;
-        // the abort-signal listener above (if provided) handles process kill.
+        // Stream cancelled by the consumer — kill the CLI so we don't leak a
+        // subprocess that nobody is reading from.
+        if (!child.killed) child.kill("SIGTERM");
       },
     });
 
@@ -668,6 +865,15 @@ export class AuggieExecutor extends BaseExecutor {
                 `Auggie CLI exited with code ${code}${stderrTail ? `: ${stderrTail}` : ""}`
               )
             )
+          );
+          return;
+        }
+        // Auggie exits 0 even when the account is dead — see classifyAuggieOutput.
+        const accountFailure = classifyAuggieOutput(stdout);
+        if (accountFailure) {
+          log?.warn?.("AUGGIE", accountFailure.message);
+          settle(
+            errorResponse(accountFailure.status, sanitizeErrorMessage(accountFailure.message))
           );
           return;
         }

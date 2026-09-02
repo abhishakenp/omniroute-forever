@@ -338,6 +338,16 @@ async function startServer(opts: { port?: number; hostname?: string } = {}) {
   discoveredRoutes = discoverRoutes();
   console.log(`[gateway] ${discoveredRoutes.length} core routes loaded`);
 
+  // Register local-CLI passthrough providers (auggie, …) so they are visible in
+  // /providers + /v1/models and, crucially, own a connection row that the
+  // failover path can quarantine when the CLI runs out of credits.
+  try {
+    const { seedLocalCliConnections } = await import("../../lib/db/seedLocalCliConnections.ts");
+    seedLocalCliConnections();
+  } catch (err) {
+    console.warn("[gateway] local-CLI connection seeding failed:", err);
+  }
+
   Bun.serve({
     port,
     hostname,
