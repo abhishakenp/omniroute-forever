@@ -25,6 +25,7 @@ import { getDbInstance } from "./core.ts";
 import { decryptConnectionFields } from "./encryption.ts";
 import { getProviderRegistry } from "../../../open-sse/services/autoCombo/providerRegistryAccessor.ts";
 import type { RegistryEntry } from "../../../open-sse/config/providers/shared.ts";
+import { selectFittingModels, type ModelLike } from "./modelFitness.ts";
 
 /**
  * True when a registry provider can serve a request with no stored credential.
@@ -52,7 +53,33 @@ function isKeylessRegistryProvider(entry: RegistryEntry): boolean {
  * new credentials, an operator action, or the provisioner — retrying it is pure
  * waste. Mirrors `isTerminalConnectionStatus` (src/sse/services/auth.ts).
  */
-const TERMINAL_STATUSES = ["expired", "banned", "credits_exhausted"] as const;
+const TERMINAL_STATUSES = ["expired", "banned"] as const;
+
+/**
+ * Quota exhaustion is NOT terminal, and treating it as terminal cost this pool
+ * most of its capacity.
+ *
+ * `credits_exhausted` was in TERMINAL_STATUSES, and nothing in the daemon has
+ * ever written it back to NULL — `markSucceeded` only clears soft statuses, and
+ * a connection in a terminal status is never selected, so it can never succeed
+ * and clear itself. Measured on this machine: 163 connections stuck there,
+ * including all 123 openrouter rows (since 2026-08-30) and all 23 bazaarlink
+ * rows (since 2026-09-01). Those are free tiers whose quota resets on a clock;
+ * they were healthy again within hours and stayed locked out for days.
+ *
+ * That is what collapsed `auto/best-free` onto cohere and dahl alone, and a
+ * two-provider pool is why a busy moment reads as `503 All providers
+ * exhausted` (measured: 67,046 upstream 429s).
+ *
+ * So quota gets the same shape the 401 fix got: a real cooldown and an
+ * escalating backoff, not a headstone. A provider that is genuinely out of
+ * credit costs one call per cooldown window; a provider whose quota reset comes
+ * back into service on its own.
+ */
+const QUOTA_STATUSES = ["credits_exhausted"] as const;
+
+/** First retry ~1h after a 402, doubling to the 12h cap. */
+const QUOTA_BACKOFF_BASE_MS = 60 * 60_000;
 
 /**
  * Statuses that mean "broken right now", not "broken forever".
@@ -72,6 +99,13 @@ export function softBackoffMs(backoffLevel: number): number {
   // Cap the exponent before shifting so a large level can't overflow to 0.
   const capped = Math.min(level, 20);
   return Math.min(SOFT_BACKOFF_BASE_MS * 2 ** capped, SOFT_BACKOFF_MAX_MS);
+}
+
+/** Escalating cooldown for quota exhaustion: 1h, 2h, 4h … capped at 12h. */
+export function quotaBackoffMs(backoffLevel: number): number {
+  const level = Number.isFinite(backoffLevel) && backoffLevel > 0 ? Math.floor(backoffLevel) : 0;
+  const capped = Math.min(level, 20);
+  return Math.min(QUOTA_BACKOFF_BASE_MS * 2 ** capped, SOFT_BACKOFF_MAX_MS);
 }
 
 /** SQL list literal, e.g. `'expired', 'banned'`. */
@@ -99,7 +133,7 @@ const CANDIDATE_PREDICATE = `
            AND (test_status IS NULL OR test_status NOT IN (${sqlList(TERMINAL_STATUSES)}))
            AND (
                  test_status IS NULL
-              OR test_status NOT IN (${sqlList(SOFT_FAILURE_STATUSES)})
+              OR test_status NOT IN (${sqlList([...SOFT_FAILURE_STATUSES, ...QUOTA_STATUSES])})
               OR (rate_limited_until IS NOT NULL AND rate_limited_until < ?)
            )
            AND (rate_limited_until IS NULL OR rate_limited_until < ?)`;
@@ -135,7 +169,7 @@ export function reviveCooldownlessSoftFailures(db: {
       `UPDATE provider_connections
           SET backoff_level = MAX(COALESCE(backoff_level, 0), ?),
               rate_limited_until = ?
-        WHERE test_status IN (${sqlList(SOFT_FAILURE_STATUSES)})
+        WHERE test_status IN (${sqlList([...SOFT_FAILURE_STATUSES, ...QUOTA_STATUSES])})
           AND rate_limited_until IS NULL`
     )
     .run(level, retryAfter);
@@ -200,6 +234,74 @@ export function __resetFreeProviderIds(): void {
   _freeProviderIds = null;
 }
 
+/**
+ * What a model has actually refused, as opposed to what its catalog claims.
+ *
+ * A catalog entry is a marketing number. Cohere advertises a 128,000-token
+ * window on `c4ai-aya-expanse-32b` and a Trial key refuses that model at
+ * roughly 16k with `error_type: TOO_MANY_TOKENS` — measured 7,918 times in
+ * ~/.omniroute/logs/omniroute.log. A static context filter cannot catch that;
+ * only the provider's own behaviour can.
+ *
+ * So remember the smallest prompt each model has refused and stop offering it
+ * anything that size or larger. Stored in `key_value` (namespace
+ * `modelTokenCeiling`) so the lesson survives a restart, which is the whole
+ * point — otherwise every boot re-learns it at the cost of another few thousand
+ * doomed upstream calls.
+ */
+const REFUSAL_NAMESPACE = "modelTokenCeiling";
+
+export function loadRefusalCeilings(db: {
+  prepare: (sql: string) => { all: (...args: unknown[]) => unknown[] };
+}): Map<string, number> {
+  const ceilings = new Map<string, number>();
+  try {
+    const rows = db
+      .prepare(`SELECT key, value FROM key_value WHERE namespace = ?`)
+      .all(REFUSAL_NAMESPACE) as Array<{ key: string; value: string }>;
+    for (const row of rows) {
+      const parsed = Number(row.value);
+      if (Number.isFinite(parsed) && parsed > 0) ceilings.set(row.key, parsed);
+    }
+  } catch {
+    // No table / no rows — an empty map simply means nothing learned yet.
+  }
+  return ceilings;
+}
+
+/**
+ * Record that `provider/model` refused a prompt of `promptTokens`.
+ *
+ * Keeps the SMALLEST refusal seen: the ceiling should converge downward onto
+ * the real limit, and a single large refusal must not erase a smaller one.
+ */
+export function recordTokenRefusal(
+  db: {
+    prepare: (sql: string) => {
+      run: (...args: unknown[]) => unknown;
+      get?: (...a: unknown[]) => unknown;
+    };
+  },
+  modelStr: string,
+  promptTokens: number
+): void {
+  if (!modelStr || !Number.isFinite(promptTokens) || promptTokens <= 0) return;
+  try {
+    const existing = db
+      .prepare(`SELECT value FROM key_value WHERE namespace = ? AND key = ?`)
+      .get?.(REFUSAL_NAMESPACE, modelStr) as { value: string } | undefined;
+    const prior = existing ? Number(existing.value) : Number.POSITIVE_INFINITY;
+    const next = Math.min(Number.isFinite(prior) ? prior : Number.POSITIVE_INFINITY, promptTokens);
+    if (Number.isFinite(prior) && next >= prior) return;
+    db.prepare(
+      `INSERT INTO key_value (namespace, key, value) VALUES (?, ?, ?)
+       ON CONFLICT(namespace, key) DO UPDATE SET value = excluded.value`
+    ).run(REFUSAL_NAMESPACE, modelStr, String(next));
+  } catch {
+    // Learning is an optimisation; never fail a request because it could not be stored.
+  }
+}
+
 export interface TargetRow {
   connectionId: string;
   provider: string;
@@ -222,6 +324,10 @@ export class TargetIterator {
   private excludedProviders: Set<string>;
   private specificProvider: string | null;
   private specificModel: string | null;
+  /** Size of the request being routed — models too small for it are not candidates. */
+  private promptTokens: number;
+  private outputTokens: number;
+  private refusedAbove: Map<string, number>;
 
   constructor(
     opts: {
@@ -229,12 +335,19 @@ export class TargetIterator {
       excludedProviders?: Set<string>;
       specificProvider?: string;
       specificModel?: string;
+      /** Estimated prompt tokens for this request (see modelFitness.ts). */
+      promptTokens?: number;
+      /** Tokens the reply may occupy, which the window must also hold. */
+      outputTokens?: number;
     } = {}
   ) {
     this.freeProvidersOnly = opts.freeProvidersOnly ?? false;
     this.excludedProviders = opts.excludedProviders ?? new Set();
     this.specificProvider = opts.specificProvider ?? null;
     this.specificModel = opts.specificModel ?? null;
+    this.promptTokens = opts.promptTokens ?? 0;
+    this.outputTokens = opts.outputTokens ?? 0;
+    this.refusedAbove = this.promptTokens > 0 ? loadRefusalCeilings(this.db) : new Map();
   }
 
   /**
@@ -294,32 +407,38 @@ export class TargetIterator {
         )
         .get(conn.provider, `${conn.provider}:%`) as { value: string } | undefined;
 
-      let modelIds: string[] = [];
+      // Keep the WHOLE model record, not just the id: `inputTokenLimit` is the
+      // only thing that can tell a 436k-window model from an 8,992-token one,
+      // and dropping it here is what made every candidate look interchangeable.
+      let models: ModelLike[] = [];
       if (modelRows?.value) {
         try {
           const parsed = JSON.parse(modelRows.value);
-          if (Array.isArray(parsed)) {
-            modelIds = parsed
-              .map((m: { id?: string }) => (typeof m?.id === "string" ? m.id : ""))
-              .filter(Boolean)
-              .slice(0, 5); // cap models per provider
-          }
+          if (Array.isArray(parsed)) models = parsed as ModelLike[];
         } catch {
           // ignore JSON parse errors
         }
       }
 
+      const registryForModels = getProviderRegistry();
+      const providerEntry = registryForModels[conn.provider];
       // Fall back to registry models for no-auth providers (opencode, auggie, etc.)
-      if (modelIds.length === 0) {
-        const registry = getProviderRegistry();
-        const entry = registry[conn.provider];
-        if (entry?.models && Array.isArray(entry.models)) {
-          modelIds = entry.models
-            .map((m: { id?: string }) => (typeof m?.id === "string" ? m.id : ""))
-            .filter(Boolean)
-            .slice(0, 3);
-        }
+      if (models.length === 0 && providerEntry?.models && Array.isArray(providerEntry.models)) {
+        models = providerEntry.models as ModelLike[];
       }
+
+      // Rank by usable window and drop what categorically cannot serve this
+      // request. Ordering is the half that matters: the measured cohere
+      // sequence spent three TOO_MANY_TOKENS refusals and one
+      // unsupported-endpoint refusal before reaching the model that works.
+      let modelIds = selectFittingModels(models, {
+        promptTokens: this.promptTokens,
+        outputTokens: this.outputTokens,
+        providerDefaultContext: providerEntry?.defaultContextLength,
+        refusedAbove: this.refusedAbove,
+        provider: conn.provider,
+        cap: 5,
+      });
 
       // If a specific model is requested, filter to only that model
       if (this.specificModel) {
@@ -385,7 +504,7 @@ export class TargetIterator {
                       AND (test_status IS NULL OR test_status NOT IN (${sqlList(TERMINAL_STATUSES)}))
                       AND (
                             test_status IS NULL
-                         OR test_status NOT IN (${sqlList(SOFT_FAILURE_STATUSES)})
+                         OR test_status NOT IN (${sqlList([...SOFT_FAILURE_STATUSES, ...QUOTA_STATUSES])})
                          OR (rate_limited_until IS NOT NULL AND rate_limited_until < ?)
                       )
                       AND (rate_limited_until IS NULL OR rate_limited_until < ?)
@@ -404,8 +523,15 @@ export class TargetIterator {
       if (!isKeylessRegistryProvider(entry)) continue;
       if (!entry.models || !Array.isArray(entry.models)) continue;
 
-      for (const model of entry.models.slice(0, 3)) {
-        const modelId = typeof model?.id === "string" ? model.id : "";
+      const keylessModelIds = selectFittingModels(entry.models as ModelLike[], {
+        promptTokens: this.promptTokens,
+        outputTokens: this.outputTokens,
+        providerDefaultContext: entry.defaultContextLength,
+        refusedAbove: this.refusedAbove,
+        provider: providerId,
+        cap: 3,
+      });
+      for (const modelId of keylessModelIds) {
         if (!modelId) continue;
         // For specific provider requests, filter to the requested model
         if (this.specificModel && modelId !== this.specificModel) continue;
@@ -469,14 +595,27 @@ export class TargetIterator {
         )
         .run(nextLevel, softRetryAfter, `HTTP ${status}`, new Date().toISOString(), connectionId);
     } else if (status === 402) {
-      // Insufficient credits — mark as credits_exhausted (provisioner will refresh)
+      // Out of credit for now — NOT forever. Write the quota status together
+      // with a cooldown and an escalating backoff, so a free tier that resets
+      // on a clock comes back on its own. Without the cooldown this row was
+      // unreachable for good: nothing ever cleared the status, and a row that
+      // is never selected can never succeed and clear itself.
+      const row = this.db
+        .prepare(`SELECT backoff_level FROM provider_connections WHERE id = ?`)
+        .get(connectionId) as { backoff_level: number | null } | undefined;
+      const nextLevel = Math.max(0, row?.backoff_level ?? 0) + 1;
+      const quotaRetryAfter = new Date(Date.now() + quotaBackoffMs(nextLevel - 1)).toISOString();
       this.db
         .prepare(
           `UPDATE provider_connections
-           SET test_status = 'credits_exhausted', last_error = ?, last_error_at = ?
+           SET test_status = 'credits_exhausted',
+               backoff_level = ?,
+               rate_limited_until = ?,
+               last_error = ?,
+               last_error_at = ?
            WHERE id = ?`
         )
-        .run(`HTTP ${status}`, new Date().toISOString(), connectionId);
+        .run(nextLevel, quotaRetryAfter, `HTTP ${status}`, new Date().toISOString(), connectionId);
     } else if ([500, 502, 503, 504].includes(status)) {
       // Short cooldown for server errors — might be transient
       this.db
@@ -506,11 +645,11 @@ export class TargetIterator {
          SET last_used_at = ?,
              backoff_level = 0,
              rate_limited_until = NULL,
-             test_status = CASE WHEN test_status IN (${sqlList(SOFT_FAILURE_STATUSES)})
+             test_status = CASE WHEN test_status IN (${sqlList([...SOFT_FAILURE_STATUSES, ...QUOTA_STATUSES])})
                                 THEN NULL ELSE test_status END,
-             last_error = CASE WHEN test_status IN (${sqlList(SOFT_FAILURE_STATUSES)})
+             last_error = CASE WHEN test_status IN (${sqlList([...SOFT_FAILURE_STATUSES, ...QUOTA_STATUSES])})
                                THEN NULL ELSE last_error END,
-             last_error_at = CASE WHEN test_status IN (${sqlList(SOFT_FAILURE_STATUSES)})
+             last_error_at = CASE WHEN test_status IN (${sqlList([...SOFT_FAILURE_STATUSES, ...QUOTA_STATUSES])})
                                   THEN NULL ELSE last_error_at END
          WHERE id = ?`
       )

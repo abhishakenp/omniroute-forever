@@ -17,6 +17,8 @@ import { errorResponse } from "../../../open-sse/utils/error.ts";
 import { triggerProviderProvisioning } from "../../sse/services/provisionerHook.ts";
 import { getExecutor, hasSpecializedExecutor } from "../../../open-sse/executors/index.ts";
 import type { RegistryEntry } from "../../../open-sse/config/providers/shared.ts";
+import { estimatePromptTokens, requestedOutputTokens } from "../../lib/db/modelFitness.ts";
+import { recordTokenRefusal } from "../../lib/db/targetIterator.ts";
 
 // NOTE: a hardcoded FREE_PROVIDERS set used to live here, unreferenced. It was
 // also wrong — it omitted dahl, llm7, uncloseai and bazaarlink, all free and all
@@ -32,6 +34,87 @@ import type { RegistryEntry } from "../../../open-sse/config/providers/shared.ts
 const SKIP_PROVIDERS = new Set([
   "aihorde", // needs API key header, not Bearer
 ]);
+
+/**
+ * How much of an upstream error body to read.
+ *
+ * Both error paths used to `await response.text()` and only then `.slice(0, 200)`
+ * — materialising the entire body before throwing almost all of it away. On the
+ * measured traffic that is ~128k error bodies read in full to keep 200 bytes,
+ * and a provider that answers an error with a megabyte of HTML is read in full
+ * too. Read a bounded prefix and drop the rest.
+ */
+const MAX_ERROR_BODY_BYTES = 2048;
+
+async function readBoundedErrorBody(response: Response): Promise<string> {
+  try {
+    const body = response.body;
+    if (!body) return "";
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (total < MAX_ERROR_BODY_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        total += value.length;
+      }
+    }
+    // Stop pulling the rest of the body over the wire.
+    await reader.cancel().catch(() => {});
+    const joined = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      joined.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return new TextDecoder().decode(joined.slice(0, MAX_ERROR_BODY_BYTES));
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Why a candidate refused, in a few words a human can act on.
+ *
+ * `503 ... tried: cohere/x (400), cohere/y (400)` says nothing — the operator
+ * cannot tell an out-of-credit pool from a prompt no free model can hold. The
+ * reason is already in the body; it just was not being carried.
+ */
+function refusalReason(status: number, message: string): string {
+  const body = message.toLowerCase();
+  if (
+    body.includes("too_many_tokens") ||
+    body.includes("context length") ||
+    body.includes("context window") ||
+    status === 413
+  ) {
+    return "prompt too large";
+  }
+  if (body.includes("trial key")) return "trial-key rate limit";
+  if (status === 429) return "rate limited";
+  if (body.includes("is not supported") || body.includes("invalid request: model"))
+    return "model cannot chat";
+  if (status === 401 || status === 403) return "auth rejected";
+  if (status === 402) return "out of credit";
+  if (status === 504) return "timeout";
+  if (status >= 500) return "upstream error";
+  return `HTTP ${status}`;
+}
+
+/** Statuses that mean "this model will refuse a prompt this size again". */
+function isTokenRefusal(status: number, message: string): boolean {
+  const body = message.toLowerCase();
+  return (
+    status === 413 ||
+    (status === 400 &&
+      (body.includes("too_many_tokens") ||
+        body.includes("context length") ||
+        body.includes("context window") ||
+        body.includes("too long")))
+  );
+}
 
 // Per-target fetch timeout — headers must arrive within this window.
 const TARGET_TIMEOUT_MS = 15_000;
@@ -71,10 +154,18 @@ export async function handleThinGateway(req: GatewayRequest): Promise<Response> 
     }
   }
 
+  // Size the request once. Nothing downstream could previously tell a 200-token
+  // ping from a 7,500-token reviewer prompt, so both got the same candidate
+  // list — which is why the small one succeeded and the large one did not.
+  const promptTokens = estimatePromptTokens(req.body);
+  const outputTokens = requestedOutputTokens(req.body);
+
   const iterator = new TargetIterator({
     freeProvidersOnly: isFreeOnly,
     specificProvider,
     specificModel,
+    promptTokens,
+    outputTokens,
   });
 
   const registry = getProviderRegistry();
@@ -113,8 +204,19 @@ export async function handleThinGateway(req: GatewayRequest): Promise<Response> 
         }
         // Wait briefly for provisioner to produce a new key
         await new Promise((resolve) => setTimeout(resolve, PROVISIONER_WAIT_MS));
-        // Try once more with fresh iterator (new keys may have been inserted)
-        const freshIter = new TargetIterator({ freeProvidersOnly: isFreeOnly });
+        // Try once more with fresh iterator (new keys may have been inserted).
+        // The pin MUST be carried over: this path used to drop
+        // specificProvider/specificModel, so a request for `cohere/command-a`
+        // whose cohere targets were exhausted came back answered by
+        // dahl/MiniMax — a different provider and a different model than the
+        // caller asked for, reported as a success.
+        const freshIter = new TargetIterator({
+          freeProvidersOnly: isFreeOnly,
+          specificProvider,
+          specificModel,
+          promptTokens,
+          outputTokens,
+        });
         const freshTarget = freshIter.nextTarget();
         if (freshTarget) {
           const result = await tryTarget(freshTarget, req, registry);
@@ -142,6 +244,18 @@ export async function handleThinGateway(req: GatewayRequest): Promise<Response> 
       `[thin-gateway] ✗ ${target.modelStr} failed: ${result.status} ${result.message.slice(0, 80)}`
     );
     errors.push({ model: target.modelStr, status: result.status, message: result.message });
+
+    // A prompt-too-large refusal is a fact about this model, not this moment.
+    // Record it so the same model is not offered the same size again.
+    if (isTokenRefusal(result.status, result.message) && promptTokens > 0) {
+      try {
+        const { getDbInstance } = await import("../../lib/db/core.ts");
+        recordTokenRefusal(getDbInstance(), target.modelStr, promptTokens);
+      } catch {
+        // Learning is an optimisation, never a failure path.
+      }
+    }
+
     iterator.markFailed(target.connectionId, result.status, RATE_LIMIT_COOLDOWN_MS);
 
     // Client disconnect check
@@ -152,13 +266,22 @@ export async function handleThinGateway(req: GatewayRequest): Promise<Response> 
 
   // All attempts failed
   const elapsed = Date.now() - startTime;
+  // Say WHICH models were tried and WHY each refused. A bare list of status
+  // codes cannot distinguish "the pool is out of credit" from "no free model
+  // can hold this prompt", and those need opposite responses from the caller.
   const summary = errors
-    .slice(0, 5)
-    .map((e) => `${e.model} (${e.status})`)
+    .slice(0, 8)
+    .map((e) => `${e.model} (${e.status} ${refusalReason(e.status, e.message)})`)
     .join(", ");
+  const sized = promptTokens > 0 ? ` | prompt ~${promptTokens} tokens` : "";
+  const overflowed = errors.length > 8 ? `... (+${errors.length - 8})` : "";
+  const nothingTried =
+    attempts === 0
+      ? " | no candidate model was eligible — every free target is cooling down, out of quota, or too small for this prompt"
+      : "";
   return errorResponse(
     503,
-    `All providers exhausted after ${attempts} attempts (${elapsed}ms) | tried: ${summary}${errors.length > 5 ? `... (+${errors.length - 5})` : ""}`
+    `All providers exhausted after ${attempts} attempts (${elapsed}ms)${sized} | tried: ${summary}${overflowed}${nothingTried}`
   );
 }
 
@@ -264,7 +387,7 @@ async function tryTarget(
     clearTimeout(timeoutId);
 
     if (!upstreamResponse.ok) {
-      const errorText = await upstreamResponse.text().catch(() => "");
+      const errorText = await readBoundedErrorBody(upstreamResponse);
       return {
         ok: false,
         status: upstreamResponse.status,
@@ -362,7 +485,7 @@ async function tryExecutorTarget(
     const response: Response = result instanceof Response ? result : result.response;
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
+      const errorText = await readBoundedErrorBody(response);
       return {
         ok: false,
         status: response.status,

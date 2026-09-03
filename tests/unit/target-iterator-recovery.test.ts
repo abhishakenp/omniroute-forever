@@ -80,9 +80,8 @@ test("reviveCooldownlessSoftFailures gives poisoned rows a cooldown and a back-o
   }
 });
 
-test("reviveCooldownlessSoftFailures never touches terminal or already-cooling rows", () => {
+test("reviveCooldownlessSoftFailures never touches banned/expired or already-cooling rows", () => {
   const db = makeDb();
-  insert(db, "terminal", "credits_exhausted", null);
   insert(db, "banned", "banned", null);
   insert(db, "expired", "expired", null);
   const existing = new Date(Date.now() + 999_000).toISOString();
@@ -149,4 +148,59 @@ test("getFreeProviderIds keeps the big free API providers", () => {
   for (const id of ["mistral", "cohere", "openrouter", "api-airforce", "pollinations"]) {
     assert.ok(free.has(id), `${id} must be considered free`);
   }
+});
+
+// ─── Quota exhaustion is recoverable ─────────────────────────────────────────
+//
+// `credits_exhausted` used to sit in TERMINAL_STATUSES, and nothing ever wrote
+// it back to NULL: markSucceeded only cleared soft statuses, and a connection
+// in a terminal status is never selected, so it could never succeed and clear
+// itself. Measured on this machine: 163 connections stuck there, including all
+// 123 openrouter rows since 2026-08-30 and all 23 bazaarlink rows since
+// 2026-09-01 — free tiers whose quota resets on a clock, locked out for days.
+// That collapse to a two-provider pool is what makes a busy moment read as
+// `503 All providers exhausted`.
+
+test("a quota-exhausted row is revived with a cooldown, not left for dead", () => {
+  const db = makeDb();
+  insert(db, "outofcredit", "credits_exhausted", null);
+
+  assert.equal(reviveCooldownlessSoftFailures(db as never), 1, "quota must get a way back");
+
+  const row = db.query(`SELECT * FROM provider_connections WHERE id = 'outofcredit'`).get() as {
+    test_status: string;
+    rate_limited_until: string | null;
+    backoff_level: number;
+  };
+  assert.ok(row.rate_limited_until, "revival must attach a cooldown, or the row stays unreachable");
+  assert.ok(
+    new Date(row.rate_limited_until as string).getTime() > Date.now(),
+    "the cooldown must be in the future"
+  );
+  assert.equal(
+    row.test_status,
+    "credits_exhausted",
+    "the status is history, the cooldown is the gate"
+  );
+});
+
+test("banned and expired stay terminal — only quota and soft failures come back", () => {
+  const db = makeDb();
+  insert(db, "banned", "banned", null);
+  insert(db, "expired", "expired", null);
+
+  assert.equal(
+    reviveCooldownlessSoftFailures(db as never),
+    0,
+    "a banned or expired credential must never be retried on a timer"
+  );
+});
+
+test("quotaBackoffMs escalates hourly and shares the 12h cap", async () => {
+  const { quotaBackoffMs } = await import("@/lib/db/targetIterator");
+  assert.equal(quotaBackoffMs(0), 60 * 60_000, "first quota retry after an hour");
+  assert.equal(quotaBackoffMs(1), 2 * 60 * 60_000);
+  assert.equal(quotaBackoffMs(2), 4 * 60 * 60_000);
+  assert.equal(quotaBackoffMs(20), 12 * 60 * 60_000, "clamped to the same 12h ceiling");
+  assert.equal(quotaBackoffMs(-1), 60 * 60_000);
 });
