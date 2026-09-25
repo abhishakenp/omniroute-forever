@@ -37,10 +37,28 @@ if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
 // the most specific / last-registered factory per module id).
 import type { ReactNode } from "react";
 import { vi } from "vitest";
-import { createTranslator } from "use-intl/core";
-import en from "../../src/i18n/messages/en.json";
 
 type Messages = Record<string, unknown>;
+
+// The dashboard (and with it next-intl, use-intl and src/i18n) was removed when the
+// server became a pure Bun gateway (e63a877b5). Static imports of either made this
+// global setup file fail to load, so every vitest file — including the gateway's own
+// src/server/headless tests — errored before running. Load them only if present.
+const intl = await (async () => {
+  try {
+    // Computed specifiers: Vite resolves literal import paths at transform time and
+    // fails the whole file when the target is missing, try/catch or not.
+    const intlCore = "use-intl/core";
+    const messages = new URL("../../src/i18n/messages/en.json", import.meta.url).href;
+    const [{ createTranslator }, en] = await Promise.all([
+      import(/* @vite-ignore */ intlCore),
+      import(/* @vite-ignore */ messages).then((m) => m.default ?? m),
+    ]);
+    return { createTranslator, en: en as Messages };
+  } catch {
+    return null;
+  }
+})();
 
 // Real next-intl's `useTranslations(namespace)` returns a REFERENTIALLY STABLE function
 // across re-renders (it's memoized internally on locale/namespace/messages). Components
@@ -50,16 +68,17 @@ type Messages = Record<string, unknown>;
 // "new" `t` every render and re-fires forever, hanging the test on a hidden infinite
 // render loop instead of failing fast. Cache one translator per namespace so identity is
 // stable, matching production.
-const translatorCache = new Map<string, ReturnType<typeof createTranslator>>();
+const translatorCache = new Map<string, unknown>();
 
-vi.mock("next-intl", () => ({
+// vi.doMock (not the hoisted vi.mock) so the mock can depend on `intl` above.
+if (intl) vi.doMock("next-intl", () => ({
   useTranslations: (namespace?: string) => {
     const cacheKey = namespace ?? "";
     const cached = translatorCache.get(cacheKey);
     if (cached) return cached;
-    const t = createTranslator({
+    const t = intl.createTranslator({
       locale: "en",
-      messages: en as Messages,
+      messages: intl.en,
       namespace,
       onError: () => {
         // Swallow MISSING_MESSAGE noise — fall back to the key below, same as the
