@@ -39,6 +39,42 @@ const ALL_PROVIDERS_COOLDOWN_MS = 60_000; // 60s
 const lastTriggerTime = new Map<string, number>();
 let lastAllTrigger = 0;
 
+// Blacklist: providers that fail provisioning repeatedly are temporarily
+// excluded to stop the 2,988 wasted provisioning attempts the logs showed.
+// A provider enters the blacklist after CONSECUTIVE_FAIL_THRESHOLD consecutive
+// failures and exits it after BLACKLIST_COOLDOWN_MS.
+const CONSECUTIVE_FAIL_THRESHOLD = 3;
+const BLACKLIST_COOLDOWN_MS = 10 * 60_000; // 10 min
+const consecutiveFails = new Map<string, number>();
+const blacklistUntil = new Map<string, number>();
+
+function isBlacklisted(provider: string): boolean {
+  const until = blacklistUntil.get(provider);
+  if (!until) return false;
+  if (Date.now() >= until) {
+    blacklistUntil.delete(provider);
+    consecutiveFails.delete(provider);
+    return false;
+  }
+  return true;
+}
+
+function recordProvisionResult(provider: string, success: boolean): void {
+  if (success) {
+    consecutiveFails.delete(provider);
+    return;
+  }
+  const count = (consecutiveFails.get(provider) ?? 0) + 1;
+  consecutiveFails.set(provider, count);
+  if (count >= CONSECUTIVE_FAIL_THRESHOLD) {
+    blacklistUntil.set(provider, Date.now() + BLACKLIST_COOLDOWN_MS);
+    log.warn(
+      "PROVISIONER_HOOK",
+      `${provider} blacklisted for ${BLACKLIST_COOLDOWN_MS / 1000}s after ${count} consecutive provisioning failures`
+    );
+  }
+}
+
 // Auto-start: ensure provisioner is running before triggering provisioning
 let provisionerStartPromise: Promise<void> | null = null;
 const PROVISIONER_SCRIPT = resolve(process.cwd(), "../account-provisioner/start-provisioner.sh");
@@ -169,20 +205,53 @@ async function getProvisionableProviders(): Promise<Set<string>> {
   return provisionableProvidersCache ?? new Set();
 }
 
-export function triggerProviderProvisioning(provider: string): void {
+/**
+ * Why a provisioning trigger did — or did not — start work.
+ *
+ * The caller needs this. `triggerProviderProvisioning` used to return void, so
+ * `thinGateway` could not tell "a provisioner run is now in flight, waiting for
+ * a key is meaningful" from "suppressed by cooldown, nothing whatsoever is
+ * happening". It waited PROVISIONER_WAIT_MS (30s) either way — half of the 60s
+ * request budget spent sleeping on a replenishment that was never requested.
+ * See the wait guard in thinGateway.ts.
+ */
+export type ProvisionTriggerResult =
+  /** A provisioning request was dispatched; a new key may appear shortly. */
+  | "started"
+  /** A provisioning request for this provider was already running. */
+  | "in-flight"
+  /** Suppressed: last trigger was less than PER_PROVIDER_COOLDOWN_MS ago. */
+  | "cooldown"
+  /** Suppressed: provider is in the consecutive-failure blacklist. */
+  | "blacklisted";
+
+/** Trigger results that mean replenishment is genuinely under way right now. */
+export function isProvisioningUnderway(result: ProvisionTriggerResult): boolean {
+  return result === "started" || result === "in-flight";
+}
+
+export function triggerProviderProvisioning(provider: string): ProvisionTriggerResult {
   const now = Date.now();
   const lastTime = lastTriggerTime.get(provider) ?? 0;
-  const cooldownRemaining = PER_PROVIDER_COOLDOWN_MS - (now - lastTime);
+
+  // Fast-path exits BEFORE any logging or network calls — the old code logged
+  // 52,066 times, 90% of which were no-ops inside cooldown.
+  if (now - lastTime < PER_PROVIDER_COOLDOWN_MS) return "cooldown";
+  if (inFlightProviders.has(provider)) return "in-flight";
+  if (isBlacklisted(provider)) return "blacklisted";
+
+  // Past the guard above, `now - lastTime >= PER_PROVIDER_COOLDOWN_MS`, so the
+  // quantity previously logged as `cooldownRemaining` was always <= 0 — it read
+  // as "-2122140ms remaining" in production and told nobody anything. What is
+  // actually true here is how long it has been since the last trigger.
+  const sinceLastTrigger = lastTime === 0 ? null : now - lastTime;
   log.info(
     "PROVISIONER_HOOK",
-    `triggerProviderProvisioning called for ${provider} — lastTime=${lastTime}, now=${now}, cooldownRemaining=${cooldownRemaining}ms, inFlight=${inFlightProviders.has(provider)}`
+    `triggerProviderProvisioning for ${provider} — ` +
+      (sinceLastTrigger === null
+        ? "first trigger"
+        : `${sinceLastTrigger}ms since last trigger (cooldown ${PER_PROVIDER_COOLDOWN_MS}ms elapsed)`)
   );
-  if (now - lastTime < PER_PROVIDER_COOLDOWN_MS) {
-    return; // cooldown active
-  }
-  if (inFlightProviders.has(provider)) {
-    return; // already provisioning
-  }
 
   lastTriggerTime.set(provider, now);
   triggeredProviderSet.add(provider);
@@ -212,22 +281,36 @@ export function triggerProviderProvisioning(provider: string): void {
           "PROVISIONER_HOOK",
           `✅ ${provider} provisioning triggered in background (job: ${data.jobId})`
         );
+        recordProvisionResult(provider, true);
       } else if (data.success) {
         log.info(
           "PROVISIONER_HOOK",
           `✅ ${provider} provisioned: ${data.apiKey?.slice(0, 12)}... (added to OmniRoute)`
         );
+        recordProvisionResult(provider, true);
+      } else if (data.skipped) {
+        // The provisioner declined on purpose (durable cooldown or ban). Not a
+        // failure: counting it as one pushes the provider toward the blacklist,
+        // and it has no `error` field, so it used to log as "failed: undefined".
+        log.info(
+          "PROVISIONER_HOOK",
+          `⏸ ${provider} provisioning skipped by provisioner (${data.reason}): ${data.detail ?? "no detail"}`
+        );
       } else {
-        log.warn("PROVISIONER_HOOK", `❌ ${provider} provisioning failed: ${data.error}`);
+        const why = data.error ?? `HTTP ${res.status} ${JSON.stringify(data).slice(0, 300)}`;
+        log.warn("PROVISIONER_HOOK", `❌ ${provider} provisioning failed: ${why}`);
+        recordProvisionResult(provider, false);
       }
     } catch (err: any) {
       log.warn("PROVISIONER_HOOK", `${provider} provisioning error: ${err?.message || "unknown"}`);
+      recordProvisionResult(provider, false);
     } finally {
       inFlightProviders.delete(provider);
     }
   })();
 
   inFlightProviders.set(provider, promise);
+  return "started";
 }
 
 /**
@@ -414,36 +497,143 @@ export function getInFlightProviders(): string[] {
 }
 
 /**
- * Delete a dead account from the provisioner's account store.
- * Called when OmniRoute detects a permanent 401/402 failure — the account is
- * confidently invalid (not rate-limited) and should be removed, not marked depleted.
- * Rate-limited accounts (429) must NOT be deleted — they're temporarily unavailable.
+ * Outcome of an upstream-provisioner account deletion.
  *
- * After deleting, automatically triggers re-provisioning for that provider
- * to replenish the lost account. This ensures terminal failures (banned,
- * credits_exhausted, expired) don't reduce long-term capacity.
+ * The old signature was `Promise<void>` and the only caller wrote
+ * `.catch(() => {})`, so every failure mode — provisioner down, 500, 403,
+ * malformed response — was indistinguishable from success. Return a value the
+ * caller can log and act on.
  */
-export async function deleteDeadAccount(provider: string, apiKey: string): Promise<void> {
-  try {
-    await ensureProvisionerRunning();
-    const res = await fetch(`${PROVISIONER_URL}/accounts/${provider}`, {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apiKey }),
-      signal: AbortSignal.timeout(5000),
-    });
-    if (res.ok) {
-      log.info(
-        "PROVISIONER_HOOK",
-        `Dead ${provider} account deleted from store (401/402) — triggering replenish`
-      );
-      // Auto-replenish: trigger provisioning for this provider to replace the dead account
-      triggerProviderProvisioning(provider);
+export type ProvisionerDeleteOutcome = {
+  ok: boolean;
+  /** How many HTTP attempts were made (>= 1). */
+  attempts: number;
+  /** Present on the terminal attempt when the provisioner answered. */
+  status?: number;
+  /** Enumerated failure classification; absent when `ok`. */
+  reason?: "http-client-error" | "http-server-error" | "network" | "unreachable";
+  /** Short human-readable detail for the log line. */
+  detail?: string;
+  /**
+   * `ok`, but the provisioner did not hold the key (404, or 200 with
+   * `deleted: false`). Nothing was removed, so nothing needs replenishing.
+   */
+  alreadyGone?: boolean;
+};
+
+/** Attempts (including the first) for a provisioner delete before giving up. */
+const PROVISIONER_DELETE_ATTEMPTS = 3;
+/** Base delay for the bounded retry schedule: 250ms, 500ms. */
+const PROVISIONER_DELETE_BACKOFF_MS = 250;
+
+/** A delete is worth retrying only for transport faults and 5xx/429. */
+function isRetriableDeleteStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Delete a dead account from **the external provisioner's** account store.
+ *
+ * Scope — read this before assuming it does more than it does. This function
+ * talks to the provisioner at PROVISIONER_URL and to nothing else. It does NOT
+ * deactivate, retire or otherwise touch OmniRoute's own `provider_connections`
+ * table. Local retirement is owned by `TargetIterator.markFailed`, which flips
+ * `test_status` to `'revoked'` once a credential has failed auth
+ * AUTH_DEAD_AFTER_LEVEL consecutive times (see src/lib/db/targetIterator.ts).
+ * The previous name — `deleteDeadAccount` — read as if it retired the
+ * credential everywhere; it never did, and 355 revoked credentials sat at
+ * `is_active = 1` for weeks partly because the name implied otherwise.
+ *
+ * Called when OmniRoute sees a 401/402/403 — the account is confidently
+ * invalid rather than rate-limited. Rate-limited accounts (429) must NOT be
+ * deleted; they are temporarily unavailable and come back on a clock.
+ *
+ * On success, triggers re-provisioning for that provider so a terminal failure
+ * does not permanently shrink the pool.
+ *
+ * @param provider     provider id, e.g. "mistral"
+ * @param apiKey       the credential the provisioner should forget
+ * @param connectionId OmniRoute connection row id — carried purely so a failure
+ *                     is traceable back to a specific credential in the logs.
+ */
+export async function deleteProvisionerAccount(
+  provider: string,
+  apiKey: string,
+  connectionId?: string
+): Promise<ProvisionerDeleteOutcome> {
+  const who = `${provider}${connectionId ? ` conn=${connectionId}` : ""}`;
+  let attempts = 0;
+  let last: ProvisionerDeleteOutcome = {
+    ok: false,
+    attempts: 0,
+    reason: "unreachable",
+    detail: "no attempt made",
+  };
+
+  for (let i = 0; i < PROVISIONER_DELETE_ATTEMPTS; i++) {
+    attempts++;
+    try {
+      await ensureProvisionerRunning();
+      const res = await fetch(`${PROVISIONER_URL}/accounts/${provider}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey }),
+        signal: AbortSignal.timeout(5000),
+      });
+
+      // 404 means the provisioner has no such account — delete is idempotent,
+      // so the post-condition we wanted ("the store does not hold this key")
+      // already holds. Treat it as success, not as a failure to retry.
+      if (res.ok || res.status === 404) {
+        // The provisioner answers 200 `{deleted:false}` for a key it no longer
+        // holds. A credential keeps failing auth until markFailed retires it
+        // (AUTH_DEAD_AFTER_LEVEL), so the same conn arrives here repeatedly;
+        // replenishing on each repeat launched a fresh provisioning run for a
+        // key that was already gone.
+        const body = res.ok ? await res.json().catch(() => null) : null;
+        if (res.status === 404 || body?.deleted === false) {
+          log.debug(
+            "PROVISIONER_HOOK",
+            `Dead ${who} account was already absent from provisioner store (HTTP ${res.status}) — no replenish`
+          );
+          return { ok: true, attempts, status: res.status, alreadyGone: true };
+        }
+        log.info(
+          "PROVISIONER_HOOK",
+          `Dead ${who} account removed from provisioner store (HTTP ${res.status}, attempt ${attempts}) — triggering replenish`
+        );
+        triggerProviderProvisioning(provider);
+        return { ok: true, attempts, status: res.status };
+      }
+
+      last = {
+        ok: false,
+        attempts,
+        status: res.status,
+        reason: res.status >= 500 ? "http-server-error" : "http-client-error",
+        detail: `provisioner answered HTTP ${res.status}`,
+      };
+      if (!isRetriableDeleteStatus(res.status)) break;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "unknown";
+      last = { ok: false, attempts, reason: "network", detail: message };
     }
-  } catch (err: any) {
-    log.warn(
-      "PROVISIONER_HOOK",
-      `Failed to delete dead ${provider} account: ${err?.message || "unknown"}`
-    );
+
+    if (i < PROVISIONER_DELETE_ATTEMPTS - 1) {
+      await sleep(PROVISIONER_DELETE_BACKOFF_MS * 2 ** i);
+    }
   }
+
+  // Escalate. A credential OmniRoute believes is dead is still sitting in the
+  // provisioner's store, so the provisioner will keep handing it back out.
+  // This is an operator-actionable condition, not a debug detail.
+  log.error(
+    "PROVISIONER_HOOK",
+    `Failed to remove dead ${who} account from provisioner after ${attempts} attempt(s): ` +
+      `${last.reason} — ${last.detail}. The provisioner may re-issue this credential; ` +
+      `OmniRoute has retired it locally regardless.`
+  );
+  return last;
 }
