@@ -10,8 +10,12 @@
  */
 
 import { readdirSync, statSync, existsSync, readFileSync } from "node:fs";
+import os from "node:os";
 import { join, relative, sep } from "node:path";
 import { handleThinGateway } from "./thinGateway.ts";
+import { failureResponse, type FailureCode } from "./failureDomain.ts";
+import { startStdoutLogRotation, resolveStdoutLogPath } from "../../lib/stdoutLogRotation.ts";
+import { parseChatBody } from "./parseChatBody.ts";
 
 // ── Load DATA_DIR/.env into process.env (if not already set) ──────────────
 (() => {
@@ -178,7 +182,25 @@ async function loadRouteHandler(route: CompiledRoute): Promise<RouteHandler> {
 
 // ── Concurrency control ─────────────────────────────────────────────────────
 
-const MAX_CONCURRENT = Number(process.env.OMNIROUTE_MAX_CONCURRENT || 64);
+/**
+ * How many upstream requests this router will carry at once.
+ *
+ * This is not only an admission-control number. `/health` publishes it, and
+ * RLM's `capacity.ts` reads it there to size its own fleet of agent
+ * subprocesses — so a ceiling chosen for a server became a subprocess count on
+ * a laptop. RLM's own comment recorded the consequence: "measured here it
+ * answered 64 ... so on this machine it is not the binding constraint and
+ * memory is", i.e. the fleet grew until RAM stopped it, and the machine became
+ * unusable before the router ever refused anything.
+ *
+ * So the default is derived from the machine rather than fixed. Four per core
+ * keeps a router that is mostly waiting on sockets busy without pretending a
+ * laptop is a datacentre, and the cap keeps a large host from re-creating the
+ * original number by accident. An operator who genuinely wants more sets
+ * OMNIROUTE_MAX_CONCURRENT and gets exactly what they asked for.
+ */
+const DEFAULT_MAX_CONCURRENT = Math.min(32, Math.max(4, (os.cpus()?.length || 4) * 4));
+const MAX_CONCURRENT = Number(process.env.OMNIROUTE_MAX_CONCURRENT || DEFAULT_MAX_CONCURRENT);
 const MAX_CONCURRENT_INTERNAL = Number(process.env.OMNIROUTE_MAX_CONCURRENT_INTERNAL || 16);
 const MAX_QUEUE_DEPTH = Number(process.env.OMNIROUTE_MAX_QUEUE_DEPTH || 500);
 const QUEUE_TIMEOUT_MS = Number(process.env.OMNIROUTE_QUEUE_TIMEOUT_MS || 30_000);
@@ -195,6 +217,25 @@ class QueueRejectedError extends Error {
   constructor(msg: string, readonly reason: "queue-full" | "queue-timeout" | "client-disconnected") {
     super(msg); this.name = "QueueRejectedError";
   }
+}
+
+/**
+ * Local admission-control reasons -> the shared refusal contract.
+ *
+ * Every one of these is OmniRoute refusing to START work; none of them means an
+ * upstream provider failed. Keeping the mapping in one table is what lets a
+ * caller tell this apart from the gateway's upstream-exhaustion refusal, which
+ * used to be byte-identical (503 + Retry-After: 5). See failureDomain.ts.
+ */
+const QUEUE_REASON_TO_FAILURE: Record<QueueRejectedError["reason"], FailureCode> = {
+  "queue-full": "admission_queue_full",
+  "queue-timeout": "admission_queue_timeout",
+  "client-disconnected": "client_disconnected",
+};
+
+/** Build the refusal response for a rejected admission attempt. */
+function admissionRejectionResponse(err: QueueRejectedError): Response {
+  return failureResponse(QUEUE_REASON_TO_FAILURE[err.reason], err.message);
 }
 
 function tryAcquire(isInternal: boolean): boolean {
@@ -262,16 +303,19 @@ async function handleRequest(request: Request): Promise<Response> {
   // No combo routing engine, no in-memory state, no TransformStream buffers.
   if (path === "/v1/chat/completions" && request.method === "POST") {
     try {
-      const body = await request.json() as Record<string, unknown>;
+      const parsed = await parseChatBody(request);
+      if (!parsed.ok) return parsed.response;
+      const body = parsed.body;
       const model = String(body.model || "auto/best-free");
       const stream = body.stream === true;
 
       try {
-        await acquireSlot(isInternalRequest(request));
+        // Pass the client's abort signal: without it the `client-disconnected`
+        // branch of acquireSlot() was unreachable, so a caller that hung up
+        // while queued still consumed a slot when its turn arrived.
+        await acquireSlot(isInternalRequest(request), request.signal);
       } catch (err) {
-        if (err instanceof QueueRejectedError) {
-          return Response.json({ error: { message: err.message, type: "server_error", code: `queue_${err.reason}` } }, { status: 503, headers: { "Retry-After": "5" } });
-        }
+        if (err instanceof QueueRejectedError) return admissionRejectionResponse(err);
         throw err;
       }
       try {
@@ -314,7 +358,7 @@ async function handleRequest(request: Request): Promise<Response> {
   const internal = isInternalRequest(request);
 
   try {
-    await acquireSlot(internal);
+    await acquireSlot(internal, request.signal);
     try {
       return await methodFn(request, ctx);
     } finally {
@@ -323,7 +367,7 @@ async function handleRequest(request: Request): Promise<Response> {
   } catch (err) {
     if (err instanceof QueueRejectedError) {
       console.warn(`[gateway] ${err.message}`);
-      return Response.json({ error: { message: err.message, type: "server_error", code: `queue_${err.reason}` } }, { status: 503, headers: { "Retry-After": "5" } });
+      return admissionRejectionResponse(err);
     }
     console.error("[gateway] Unhandled error:", err);
     return Response.json({ error: { message: "Internal server error", type: "server_error" } }, { status: 500 });
@@ -334,9 +378,26 @@ async function startServer(opts: { port?: number; hostname?: string } = {}) {
   const port = opts.port ?? Number(process.env.PORT ?? process.env.DASHBOARD_PORT ?? 20128);
   const hostname = opts.hostname ?? process.env.HOST ?? "0.0.0.0";
 
+  // Rotate the daemon's own stdout log. This is the ONLY entrypoint launchd
+  // actually execs, and rotation has to be periodic here (not startup-only) or
+  // a KeepAlive daemon never checks again — which is how omniroute.log reached
+  // 54 MB beside five empty archives. See stdoutLogRotation.ts.
+  try {
+    const dataDir = process.env.DATA_DIR || join(process.env.HOME || "", ".omniroute");
+    const stdoutLog = resolveStdoutLogPath(dataDir);
+    if (stdoutLog) {
+      startStdoutLogRotation(stdoutLog);
+      console.log(`[gateway] stdout log rotation armed for ${stdoutLog}`);
+    } else {
+      console.log("[gateway] stdout log rotation skipped — no log file to watch");
+    }
+  } catch (err) {
+    console.warn("[gateway] stdout log rotation setup failed:", err);
+  }
+
   console.log("[gateway] Discovering API routes...");
   discoveredRoutes = discoverRoutes();
-  console.log(`[gateway] ${discoveredRoutes.length} core routes loaded`);
+  console.log(`[gateway] ${discoveredRoutes.length} core routes loaded (t=${Math.round(performance.now())}ms)`);
 
   // Register local-CLI passthrough providers (auggie, …) so they are visible in
   // /providers + /v1/models and, crucially, own a connection row that the
@@ -344,18 +405,42 @@ async function startServer(opts: { port?: number; hostname?: string } = {}) {
   try {
     const { seedLocalCliConnections } = await import("../../lib/db/seedLocalCliConnections.ts");
     seedLocalCliConnections();
+    console.log(`[gateway] local-CLI connections seeded, DB open (t=${Math.round(performance.now())}ms)`);
   } catch (err) {
     console.warn("[gateway] local-CLI connection seeding failed:", err);
   }
 
-  Bun.serve({
-    port,
-    hostname,
-    maxRequestBodySize: MAX_BODY_BYTES,
-    fetch: handleRequest,
-  });
+  // Retry port binding — launchd's KeepAlive can restart before the old
+  // process has released the port, producing "Failed to start server. Is
+  // port 20128 in use?" 1,875 times in one log. Wait and retry instead of
+  // exiting immediately.
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  const maxRetries = 5;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      server = Bun.serve({
+        port,
+        hostname,
+        maxRequestBodySize: MAX_BODY_BYTES,
+        fetch: handleRequest,
+      });
+      break;
+    } catch (err: any) {
+      if (attempt < maxRetries && /port.*in use|EADDRINUSE/i.test(String(err?.message ?? err))) {
+        console.warn(`[gateway] Port ${port} in use (attempt ${attempt}/${maxRetries}) — retrying in 5s...`);
+        await new Promise((r) => setTimeout(r, 5000));
+      } else {
+        throw err;
+      }
+    }
+  }
 
-  console.log(`[gateway] Server listening on http://${hostname}:${port}`);
+  // Time since the process began, so a slow cold start shows in the log
+  // instead of only as failed requests upstream.
+  console.log(
+    `[gateway] Server listening on http://${hostname}:${port} ` +
+      `(${Math.round(performance.now())}ms after process start, ${new Date().toISOString()})`
+  );
   console.log(`[gateway] RSS: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`);
 
   process.on("SIGTERM", () => { console.log("[gateway] SIGTERM — shutting down"); process.exit(0); });
