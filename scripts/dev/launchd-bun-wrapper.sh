@@ -28,7 +28,15 @@ done
 
 if [ -n "$BUN_BIN" ]; then
   echo "[launchd-wrapper] $(date '+%Y-%m-%dT%H:%M:%S') using bun: $BUN_BIN $("$BUN_BIN" --version)"
-  exec "$BUN_BIN" "$REPO_DIR/src/server/headless/server-elysia.ts"
+  # The Cordis host (omniroute.mjs + cordis.yml): same routes as server-elysia
+  # (shared coreRoutes.ts), and every row — gateway, router, store, provisioner
+  # — hot-reloads in place, so an edit never needs this job restarted.
+  # OMNIROUTE_HOST=elysia in the plist's EnvironmentVariables runs the old
+  # single-file server instead (rollback).
+  if [ "${OMNIROUTE_HOST:-cordis}" = "elysia" ]; then
+    exec "$BUN_BIN" "$REPO_DIR/src/server/headless/server-elysia.ts"
+  fi
+  exec "$BUN_BIN" "$REPO_DIR/omniroute.mjs"
 fi
 
 # ── Fallback: Node.js headless server ───────────────────────────────────────
