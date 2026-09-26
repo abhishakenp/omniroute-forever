@@ -279,3 +279,6 @@ docker-compose.yml.bak
 # CLI local cache/state
 .playwright-cli
 .pi/
+
+# pixel per-worktree cache state
+.pixel/
