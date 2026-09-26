@@ -13,7 +13,10 @@ import {
   resolveDynamicQuotaFetcher,
   type QuotaFetcher,
 } from "./quotaPreflight.ts";
-import { getSessionInfo } from "./sessionManager.ts";
+// Session manager removed — stateless gateway. getSessionInfo always returns null.
+function getSessionInfo(_sessionId: string | null): null {
+  return null;
+}
 
 export { registerQuotaFetcher };
 export type { QuotaFetcher };

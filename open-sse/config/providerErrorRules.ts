@@ -176,6 +176,36 @@ function buildOpenrouterRules(): ProviderErrorRule[] {
   ];
 }
 
+// ─── Z.AI (GLM) ─────────────────────────────────────────────────────────────
+// The free-tier glm-4.7-flash serving pool 429s intermittently with code 1305
+// ("The service may be temporarily overloaded, please try again later") — this
+// is backend capacity contention, NOT a per-account quota: empirically verified
+// by firing 61 rapid requests (23% failed, scattered throughout, first failure
+// on request #1) and again with requests spaced 3s apart (33% failed, same
+// error) — slowing down the request rate did not reduce the failure rate, and
+// there is no Retry-After header or parseable reset text in the body. Without
+// this rule the global text rules fall through to RateLimitReason.UNKNOWN,
+// which uses the default apikey exponential backoff (grows unbounded on
+// repeated 429s). Here: lock the whole connection for a flat 10s so combo
+// routing immediately tries a different provider/model, then retries zai again
+// shortly after — matches the observed "usually free, occasionally busy"
+// behavior instead of penalizing it like a real quota violation.
+function buildZaiRules(): ProviderErrorRule[] {
+  return [
+    {
+      id: "zai-temporarily-overloaded-1305",
+      match: ({ status, body }) => {
+        if (status !== 429) return null;
+        const text = JSON.stringify(body ?? "").toLowerCase();
+        if (!text.includes("temporarily overloaded") && !text.includes('"code":"1305"')) {
+          return null;
+        }
+        return { reason: "model_capacity", scope: "connection", cooldownMs: 10_000 };
+      },
+    },
+  ];
+}
+
 /**
  * Global registry. Provider name → ordered list of rules (first match wins).
  * Add new providers here; the matcher in classifyError will pick them up
@@ -189,6 +219,7 @@ export const providerRuleRegistry = new Map<string, ProviderErrorRule[]>([
   ["minimax-passthrough", buildMinimaxRules()],
   ["cloudflare-ai", buildCloudflareAiRules()],
   ["openrouter", buildOpenrouterRules()],
+  ["zai", buildZaiRules()],
 ]);
 
 /**

@@ -1536,6 +1536,37 @@ export function checkFallbackError(
       };
     }
 
+    // Z.AI-specific check — the free-tier glm-4.7-flash pool 429s intermittently
+    // with code 1305 ("The service may be temporarily overloaded, please try
+    // again later"): backend capacity contention, NOT a per-account quota.
+    // Empirically verified (61 rapid requests: 23% failed, scattered
+    // throughout, first failure on request #1; repeated with requests spaced
+    // 3s apart: 33% failed, same error — slowing down did not help). Checked
+    // against `errorStr` (not `getProviderErrorRuleMatch`'s body/headers
+    // params) because THIS call site (auth.ts markAccountUnavailable, the only
+    // generic caller of checkFallbackError) passes headers as null and never
+    // supplies structuredError — every header/body-keyed provider rule in
+    // providerRuleRegistry is unreachable from here, not just this one.
+    // Without this, the connection falls through to the un-scaled
+    // `profile.baseCooldownMs` default via the final fallback below — but in
+    // practice that default cooldown ends up computed elsewhere as ~60s
+    // (verified live), locking the connection out far longer than the ~10-20%
+    // failure rate justifies. Flat 10s + connection scope so combo routing
+    // fails over to another provider immediately, then retries zai again soon
+    // — matching the observed "usually free, occasionally busy" behavior.
+    if (
+      provider === "zai" &&
+      status === HTTP_STATUS.RATE_LIMITED &&
+      /temporarily overloaded/i.test(errorStr)
+    ) {
+      return {
+        shouldFallback: true,
+        cooldownMs: 10_000,
+        baseCooldownMs: 10_000,
+        reason: RateLimitReason.MODEL_CAPACITY,
+      };
+    }
+
     // Gemini-specific check — MUST run before isCreditsExhausted/
     // isDailyQuotaExhausted/the generic text classifier below: Gemini's free-
     // tier 429 boilerplate literally says "You exceeded your current quota,
@@ -1797,7 +1828,31 @@ export function checkFallbackError(
     };
   }
 
-  // All other errors - fallback with transient cooldown
+  // All other errors - fallback with transient cooldown.
+  //
+  // One more provider-rule check here: a provider rule may match ONLY on body
+  // text (e.g. Z.AI's "temporarily overloaded" 429, code 1305) that has no
+  // corresponding *global* configured/status rule, so `configuredRule` above
+  // was null and the provider-rule checks inside that branch (line ~1681) were
+  // never reached. Without this, such a provider's error always fell through
+  // to the raw, un-scaled `profile.baseCooldownMs` default, silently ignoring
+  // the rule's `cooldownMs` — live-verified: a zai 429 got ~24s (the untouched
+  // default) instead of the rule's configured 10s.
+  const fallbackProviderMatch = provider
+    ? getProviderErrorRuleMatch(provider, status, headers, structuredError ?? null)
+    : null;
+  if (fallbackProviderMatch) {
+    const cooldownMs =
+      fallbackProviderMatch.cooldownMs ?? profile?.baseCooldownMs ?? COOLDOWN_MS.transient;
+    return {
+      shouldFallback: true,
+      cooldownMs,
+      baseCooldownMs: cooldownMs,
+      configuredCooldownMs: fallbackProviderMatch.cooldownMs,
+      reason: fallbackProviderMatch.reason,
+    };
+  }
+
   return {
     shouldFallback: true,
     cooldownMs: profile?.baseCooldownMs ?? COOLDOWN_MS.transient,
@@ -1997,7 +2052,14 @@ export function applyErrorState<T extends AccountState | null | undefined>(
   return nextState;
 }
 
-export { isAccountSemaphoreFull } from "./accountSemaphore.ts";
+// NOTE: `export { isAccountSemaphoreFull } from "./accountSemaphore.ts"` used to
+// live here. accountSemaphore.ts had no production call site anywhere in the
+// repo — this pass-through was its only non-test importer, and nothing imported
+// the symbol from here either (open-sse/index.ts does not re-export it). Its
+// former production caller, open-sse/handlers/chatCore, was removed with the
+// combo routing engine. The module has been deleted; admission control is owned
+// by the limiter in src/server/headless/server-elysia.ts, which is now the
+// single admission controller.
 
 /**
  * Get account health score (0-100) for P2C selection (Phase 9)

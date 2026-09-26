@@ -42,6 +42,9 @@ const STATIC_SALT = "omniroute-field-encryption-v1";
 
 let _staticKey: Buffer | null = null;
 let _legacyDynamicKey: Buffer | null = null;
+// Suppress the repeated "STORAGE_ENCRYPTION_KEY is not set" warning — it fired
+// 66,004 times in one log session. The condition is process-static.
+let encryptionWarningLogged = false;
 /** Connection object with potentially encrypted credential fields. */
 export interface ConnectionFields {
   apiKey?: string | null;
@@ -165,9 +168,14 @@ export function decrypt(ciphertext: string | null | undefined): string | null | 
 
   const staticKey = getStaticKey();
   if (!staticKey) {
-    console.warn(
-      "[Encryption] Found encrypted data but STORAGE_ENCRYPTION_KEY is not set. Cannot decrypt."
-    );
+    // Log once per process — this fired 66,004 times in one log, drowning
+    // everything else. The condition does not change between calls.
+    if (!encryptionWarningLogged) {
+      encryptionWarningLogged = true;
+      console.warn(
+        "[Encryption] Found encrypted data but STORAGE_ENCRYPTION_KEY is not set. Cannot decrypt. (warning logged once)"
+      );
+    }
     return null;
   }
 
