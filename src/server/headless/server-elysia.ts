@@ -9,13 +9,23 @@
  *   bun src/server/headless/server-elysia.ts --port 20128
  */
 
-import { readdirSync, statSync, existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
-import { join, relative, sep } from "node:path";
+import { join } from "node:path";
 import { handleThinGateway } from "./thinGateway.ts";
 import { failureResponse, type FailureCode } from "./failureDomain.ts";
 import { startStdoutLogRotation, resolveStdoutLogPath } from "../../lib/stdoutLogRotation.ts";
 import { parseChatBody } from "./parseChatBody.ts";
+import {
+  apiDirFor,
+  discoverRoutes,
+  HTTP_METHODS,
+  loadRouteHandler,
+  matchRoute,
+  type CompiledRoute,
+  type RouteContext,
+  type RouteHandler,
+} from "./coreRoutes.ts";
 
 // ── Load DATA_DIR/.env into process.env (if not already set) ──────────────
 (() => {
@@ -29,156 +39,9 @@ import { parseChatBody } from "./parseChatBody.ts";
   }
 })();
 
-// ── Route discovery (same logic as router.ts, simplified) ───────────────────
+// ── Route discovery lives in coreRoutes.ts, shared with the Cordis gateway row ──
 
-interface RouteHandler {
-  GET?: (req: Request, ctx: RouteContext) => Promise<Response> | Response;
-  POST?: (req: Request, ctx: RouteContext) => Promise<Response> | Response;
-  PUT?: (req: Request, ctx: RouteContext) => Promise<Response> | Response;
-  DELETE?: (req: Request, ctx: RouteContext) => Promise<Response> | Response;
-  PATCH?: (req: Request, ctx: RouteContext) => Promise<Response> | Response;
-  OPTIONS?: (req: Request, ctx: RouteContext) => Promise<Response> | Response;
-  HEAD?: (req: Request, ctx: RouteContext) => Promise<Response> | Response;
-}
-
-interface RouteContext {
-  params: Record<string, string | string[]>;
-  searchParams: URLSearchParams;
-}
-
-type Segment =
-  | { type: "literal"; value: string }
-  | { type: "param"; name: string }
-  | { type: "catch-all"; name: string }
-  | { type: "optional-catch-all"; name: string };
-
-interface CompiledRoute {
-  originalPath: string;
-  segments: Segment[];
-  modulePath: string;
-  specificity: number;
-}
-
-const API_DIR = join(process.cwd(), "src", "app", "api");
-const HTTP_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"] as const;
-
-// Core directory prefixes (relative to /api/) — only these are loaded
-const CORE_DIRS: string[] = [
-  "v1/chat/completions", "v1/messages", "v1/completions", "v1/responses",
-  "v1/embeddings", "v1/moderations", "v1/rerank",
-  "v1/audio/", "v1/images/", "v1/files",
-  "v1/models", "v1/models/",
-  "v1/combos", "v1/quotas/check", "v1/me/status",
-  "v1/registered-keys", "v1/ws",
-  "v1/providers/",
-  "providers", "combos", "keys",
-  "monitoring", "health", "health/",
-  "synced-available-models", "free-models", "free-tier", "free-provider-rankings",
-  "resilience",
-  "auth/status", "auth/login", "auth/logout",
-];
-
-function isCoreRoute(originalPath: string): boolean {
-  const rel = originalPath.replace(/^\/api\//, "");
-  return CORE_DIRS.some((d) => rel === d || rel.startsWith(d + "/") || rel.startsWith(d));
-}
-
-function discoverRoutes(apiDir: string = API_DIR): CompiledRoute[] {
-  const routes: CompiledRoute[] = [];
-  function scan(dir: string) {
-    if (!existsSync(dir)) return;
-    for (const entry of readdirSync(dir)) {
-      const fullPath = join(dir, entry);
-      const stat = statSync(fullPath);
-      if (stat.isDirectory()) scan(fullPath);
-      else if (entry === "route.ts" || entry === "route.tsx") {
-        const relativePath = relative(apiDir, fullPath);
-        const routePath = "/api/" + relativePath.replace(/\/route\.tsx?$/, "").split(sep).join("/");
-        const compiled = compileRoute(routePath, fullPath);
-        if (isCoreRoute(routePath)) routes.push(compiled);
-      }
-    }
-  }
-  scan(apiDir);
-  routes.sort((a, b) => b.specificity - a.specificity);
-  return routes;
-}
-
-function compileRoute(routePath: string, modulePath: string): CompiledRoute {
-  const rawSegments = routePath.split("/").filter(Boolean);
-  const segments: Segment[] = [];
-  let specificity = 0;
-  for (const seg of rawSegments) {
-    if (seg.startsWith("[...") && seg.endsWith("]")) {
-      segments.push({ type: "catch-all", name: seg.slice(4, -1) });
-      specificity -= 10;
-    } else if (seg.startsWith("[[...") && seg.endsWith("]]")) {
-      segments.push({ type: "optional-catch-all", name: seg.slice(5, -2) });
-      specificity -= 5;
-    } else if (seg.startsWith("[") && seg.endsWith("]")) {
-      segments.push({ type: "param", name: seg.slice(1, -1) });
-      specificity += 1;
-    } else {
-      segments.push({ type: "literal", value: decodeURIComponent(seg) });
-      specificity += 10;
-    }
-  }
-  return { originalPath: routePath, segments, modulePath, specificity };
-}
-
-function tryMatch(pathSegments: string[], routeSegments: Segment[]): Record<string, string | string[]> | null {
-  const params: Record<string, string | string[]> = {};
-  let pi = 0, ri = 0;
-  while (ri < routeSegments.length) {
-    const seg = routeSegments[ri];
-    if (seg.type === "literal") {
-      if (pi >= pathSegments.length || decodeURIComponent(pathSegments[pi]) !== seg.value) return null;
-      pi++; ri++;
-    } else if (seg.type === "param") {
-      if (pi >= pathSegments.length) return null;
-      params[seg.name] = decodeURIComponent(pathSegments[pi]);
-      pi++; ri++;
-    } else if (seg.type === "catch-all") {
-      const remaining = pathSegments.slice(pi);
-      params[seg.name] = remaining.length === 0 ? [] : remaining.map((s) => decodeURIComponent(s));
-      pi = pathSegments.length; ri++;
-      if (ri < routeSegments.length) return null;
-    } else if (seg.type === "optional-catch-all") {
-      const remaining = pathSegments.slice(pi);
-      params[seg.name] = remaining.map((s) => decodeURIComponent(s));
-      pi = pathSegments.length; ri++;
-      if (ri < routeSegments.length) return null;
-    }
-  }
-  if (pi < pathSegments.length) return null;
-  return params;
-}
-
-function matchRoute(path: string, routes: CompiledRoute[]) {
-  const pathSegments = path.split("/").filter(Boolean);
-  for (const route of routes) {
-    const params = tryMatch(pathSegments, route.segments);
-    if (params !== null) return { route, params };
-  }
-  return null;
-}
-
-// ── Module cache ────────────────────────────────────────────────────────────
-
-const moduleCache = new Map<string, RouteHandler>();
-
-async function loadRouteHandler(route: CompiledRoute): Promise<RouteHandler> {
-  const cached = moduleCache.get(route.modulePath);
-  if (cached) return cached;
-  const fileUrl = `file://${route.modulePath}`;
-  const mod = await import(fileUrl);
-  const handler: RouteHandler = {};
-  for (const method of HTTP_METHODS) {
-    if (typeof mod[method] === "function") handler[method] = mod[method];
-  }
-  moduleCache.set(route.modulePath, handler);
-  return handler;
-}
+const API_DIR = apiDirFor(process.cwd());
 
 // ── Concurrency control ─────────────────────────────────────────────────────
 
@@ -396,7 +259,7 @@ async function startServer(opts: { port?: number; hostname?: string } = {}) {
   }
 
   console.log("[gateway] Discovering API routes...");
-  discoveredRoutes = discoverRoutes();
+  discoveredRoutes = discoverRoutes(API_DIR);
   console.log(`[gateway] ${discoveredRoutes.length} core routes loaded (t=${Math.round(performance.now())}ms)`);
 
   // Register local-CLI passthrough providers (auggie, …) so they are visible in

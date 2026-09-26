@@ -3,6 +3,14 @@
 # fixes DATA_DIR) before the gateway imports the routing path that reads it.
 - id: logger
   name: '@deepseek-ai/cordis-plugin-logger-console'
+# Hot reload of every row's source (and the router it imports) with no
+# restart: Bun module reload, in-place class patching, and the gateway keeps its
+# listening socket across its own swaps. Vendored from rlm's rlm-hmr.
+- id: hmr
+  name: ./packages/omniroute-hmr/src/index.ts
+  config:
+    roots: [packages, src, open-sse]
+    resourceRoots: []
 - id: db
   name: ./packages/omniroute-db/src/index.ts
 # Swapping the store is a TWO-step edit, not one.
@@ -68,10 +76,11 @@
 - id: gateway
   name: ./packages/omniroute-gateway/src/index.ts
   config:
-    port: 20131
-    # The live launchd job sets OMNIROUTE_MAX_CONCURRENT=12; here the same
-    # number is composition, not environment, so it is visible in the file that
-    # describes the deployment rather than in a plist nobody reads.
+    # 0 = $PORT, else 20128 — the launchd plist sets PORT=20128. A test copy
+    # runs with PORT=<other>.
+    port: 0
+    # The live launchd job sets OMNIROUTE_MAX_CONCURRENT=12, and the environment
+    # wins (as it did for server-elysia); this is the value when it is unset.
     maxConcurrent: 12
 - id: provisioner-sdk
   name: ./packages/omniroute-provisioner-sdk/src/index.ts
