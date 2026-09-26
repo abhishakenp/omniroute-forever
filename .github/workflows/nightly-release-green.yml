@@ -32,7 +32,7 @@ on:
       - "tests/**"
       - "config/**"
       - "package.json"
-      - "package-lock.json"
+      - "bun.lock"
       - "tsconfig*.json"
   schedule:
     - cron: "23 5 * * *" # full sweep — off-peak, distinct from other nightlies
@@ -116,11 +116,11 @@ jobs:
           git checkout "$TARGET"
           git log -1 --oneline
 
+      - uses: oven-sh/setup-bun@v2
+
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
-          cache: npm
-
       - uses: ./.github/actions/npm-ci-retry
 
       - name: Release-green validation (full)
@@ -229,11 +229,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - uses: oven-sh/setup-bun@v2
+
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
-          cache: npm
-
       - uses: ./.github/actions/npm-ci-retry
 
       - name: Main-green validation
@@ -371,11 +371,11 @@ jobs:
           git checkout "$TARGET"
           git log -1 --oneline
 
+      - uses: oven-sh/setup-bun@v2
+
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
-          cache: npm
-
       - uses: ./.github/actions/npm-ci-retry
 
       - name: Ratchet the baselines down

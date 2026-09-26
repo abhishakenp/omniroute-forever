@@ -15,14 +15,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
-        with: { node-version: "24", cache: npm }
-      - run: npm ci
+        with: { node-version: "24" }
+      - run: bun install --frozen-lockfile
       - name: Build CLI bundle
         env:
           JWT_SECRET: ci-build-secret-with-sufficient-length-for-validation
           OMNIROUTE_BUILD_BACKEND_ONLY: "1"
-        run: npm run build:cli
+        run: bun run build:cli
       - name: Start OmniRoute (block mode)
         env:
           JWT_SECRET: ci-build-secret-with-sufficient-length-for-validation
@@ -36,7 +37,7 @@ jobs:
             sleep 2
           done
       - name: promptfoo guard-validation
-        run: npx --yes promptfoo@latest eval -c promptfooconfig.yaml --no-cache
+        run: bunx --yes promptfoo@latest eval -c promptfooconfig.yaml --no-cache
         env:
           OMNIROUTE_URL: http://localhost:20128
           OMNIROUTE_API_KEY: not-needed-blocked-before-upstream
@@ -67,17 +68,18 @@ jobs:
         with:
           persist-credentials: false
         if: steps.gate.outputs.run == 'true'
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         if: steps.gate.outputs.run == 'true'
-        with: { node-version: "24", cache: npm }
-      - run: npm ci
+        with: { node-version: "24" }
+      - run: bun install --frozen-lockfile
         if: steps.gate.outputs.run == 'true'
       - name: Build CLI bundle
         if: steps.gate.outputs.run == 'true'
         env:
           JWT_SECRET: ci-build-secret-with-sufficient-length-for-validation
           OMNIROUTE_BUILD_BACKEND_ONLY: "1"
-        run: npm run build:cli
+        run: bun run build:cli
       - name: Start OmniRoute
         if: steps.gate.outputs.run == 'true'
         env:

@@ -91,18 +91,16 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: npm
-
       - name: Cache node_modules
         uses: actions/cache@v6.1.0
         with:
           path: node_modules
-          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          key: ${{ runner.os }}-node-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-node-
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
         env:
           NPM_CONFIG_LEGACY_PEER_DEPS: true
 
@@ -132,7 +130,7 @@ jobs:
           # (docs/reference/ENVIRONMENT.md, #6409) and is the same remedy already
           # applied to nightly-compat's Node 26 build (#8090).
           OMNIROUTE_USE_TURBOPACK: ${{ matrix.platform == 'linux' && '0' || '1' }}
-        run: npm run build
+        run: bun run build
 
       - name: Sync version in electron/package.json
         shell: bash
@@ -158,13 +156,13 @@ jobs:
 
       - name: Install Electron dependencies
         working-directory: electron
-        run: npm install --no-audit --no-fund
+        run: bun install
 
       - name: Build Electron for ${{ matrix.platform }}
         working-directory: electron
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run build:${{ matrix.target }}
+        run: bun run build:${{ matrix.target }}
 
       - name: Smoke packaged Electron app
         if: matrix.platform != 'linux'
@@ -181,14 +179,14 @@ jobs:
         env:
           ELECTRON_SMOKE_TIMEOUT_MS: 60000
           ELECTRON_SMOKE_STREAM_LOGS: "1"
-        run: npm run electron:smoke:packaged
+        run: bun run electron:smoke:packaged
 
       - name: Smoke packaged Electron app (Linux)
         if: matrix.platform == 'linux'
         env:
           ELECTRON_SMOKE_TIMEOUT_MS: 60000
           ELECTRON_SMOKE_STREAM_LOGS: "1"
-        run: xvfb-run -a npm run electron:smoke:packaged
+        run: xvfb-run -a bun run electron:smoke:packaged
 
       - name: Collect installers
         shell: bash

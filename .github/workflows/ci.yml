@@ -39,6 +39,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -94,26 +95,26 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
-      - run: npm run check:node-runtime
-      - run: npm run audit:deps
+      - run: bun run check:node-runtime
+      - run: bun run audit:deps
       - name: Restore ESLint file cache
         uses: actions/cache@v6
         with:
           path: |
             .eslintcache
             .eslintcache-complexity
-          key: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.mjs', 'eslint.complexity-ratchets.config.mjs', 'config/quality/eslint-suppressions.json', 'package-lock.json') }}
+          key: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.mjs', 'eslint.complexity-ratchets.config.mjs', 'config/quality/eslint-suppressions.json', 'bun.lock') }}
           restore-keys: |
             eslint-${{ runner.os }}-
       # Single ESLint inventory (JSON) — quality-gate reuses the artifact instead of
       # a second cold full-tree pass for eslintWarnings ratchet counts.
       - name: ESLint (JSON report)
-        run: npm run lint:json
+        run: bun run lint:json
       - name: Upload ESLint results
         if: always()
         uses: actions/upload-artifact@v7
@@ -122,21 +123,21 @@ jobs:
           path: .artifacts/eslint-results.json
           if-no-files-found: warn
           retention-days: 7
-      - run: npm run check:cycles
-      - run: npm run check:route-validation:t06
-      - run: npm run check:any-budget:t11
-      - run: npm run check:provider-consistency
-      - run: npm run check:fetch-targets
-      - run: npm run check:deps
-      - run: npm run check:file-size
-      - run: npm run check:error-helper
-      - run: npm run check:migration-numbering
-      - run: npm run check:public-creds
-      - run: npm run check:db-rules
-      - run: npm run check:known-symbols
-      - run: npm run check:route-guard-membership
-      - run: npm run check:test-discovery
-      - run: npm run check:tracked-artifacts
+      - run: bun run check:cycles
+      - run: bun run check:route-validation:t06
+      - run: bun run check:any-budget:t11
+      - run: bun run check:provider-consistency
+      - run: bun run check:fetch-targets
+      - run: bun run check:deps
+      - run: bun run check:file-size
+      - run: bun run check:error-helper
+      - run: bun run check:migration-numbering
+      - run: bun run check:public-creds
+      - run: bun run check:db-rules
+      - run: bun run check:known-symbols
+      - run: bun run check:route-guard-membership
+      - run: bun run check:test-discovery
+      - run: bun run check:tracked-artifacts
       # (gap 30) Also lives in quality.yml's PR-only "Merge integrity" job — because the
       # CHANGELOG half of that job needs a base to diff against. This half does NOT: the
       # generator either reproduces the committed SKILL.md files or it does not.
@@ -147,27 +148,27 @@ jobs:
       # into a base-red that blocked EVERY PR into release/v3.8.50 until #8954. Running it here
       # means a push to `main` catches the drift at the source instead of the next cycle
       # inheriting it.
-      - run: npm run check:agent-skills-sync
+      - run: bun run check:agent-skills-sync
       # WS1.7 (v3.8.49 plan): Dockerfile lint (hadolint, pinned by digest).
       # failure-threshold=error keeps the 5 pre-existing warnings (DL3008/DL3003/
       # DL3016 version pinning / WORKDIR) visible without blocking; any ERROR fails.
       - name: hadolint (Dockerfile)
         run: docker run --rm -i hadolint/hadolint@sha256:27086352fd5e1907ea2b934eb1023f217c5ae087992eb59fde121dce9c9ff21e hadolint --failure-threshold error - < Dockerfile
-      - run: npm run check:lockfile
-      - run: npm run check:licenses
+      - run: bun run check:lockfile
+      - run: bun run check:licenses
       # check:docs-sync is run by the docs-sync-strict job (via check:docs-all) and the
       # husky pre-commit hook; the standalone copy here was redundant (ROI dedup).
-      - run: npm run typecheck:core
+      - run: bun run typecheck:core
       # #7033: typecheck:core's curated file allowlist does not cover
       # src/app/(dashboard) TSX (and next.config.mjs sets ignoreBuildErrors:
       # true, so `next build` never type-checks it either) — orphaned
       # identifiers there (see #6625/#6909) were invisible to CI. This gate
       # runs tsc scoped to the dashboard tree against a frozen baseline of
       # pre-existing errors; only NEW errors fail it.
-      - run: npm run check:dashboard-typecheck
+      - run: bun run check:dashboard-typecheck
       # typecheck:noimplicit:core dropped from this job (2026-07 optimize):
       # it was advisory (continue-on-error) and largely subsumed by the blocking
-      # check:type-coverage ratchet in quality-gate. Local: npm run typecheck:noimplicit:core.
+      # check:type-coverage ratchet in quality-gate. Local: bun run typecheck:noimplicit:core.
 
   quality-gate:
     name: Quality Ratchet
@@ -194,10 +195,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
       - name: Restore ESLint file cache
         uses: actions/cache@v6
@@ -205,7 +206,7 @@ jobs:
           path: |
             .eslintcache
             .eslintcache-complexity
-          key: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.mjs', 'eslint.complexity-ratchets.config.mjs', 'config/quality/eslint-suppressions.json', 'package-lock.json') }}
+          key: eslint-${{ runner.os }}-${{ hashFiles('eslint.config.mjs', 'eslint.complexity-ratchets.config.mjs', 'config/quality/eslint-suppressions.json', 'bun.lock') }}
           restore-keys: |
             eslint-${{ runner.os }}-
       # Coverage mergeada (coverage-summary.json) p/ o ratchet de cobertura.
@@ -225,7 +226,7 @@ jobs:
         with:
           name: eslint-results
           path: .artifacts/
-      - run: npm run quality:collect
+      - run: bun run quality:collect
       # Catraca: falha se qualquer métrica regredir vs quality-baseline.json (commitado).
       # Hoje: contagem de warnings do ESLint. Fase 4 estende com cobertura (lida do
       # coverage mergeado). Tamanho de arquivo e duplicação têm gates dedicados.
@@ -245,24 +246,24 @@ jobs:
       # Catraca de duplicação (jscpd@4 sobre src+open-sse). Roda neste job (paralelo)
       # para não pesar no caminho crítico do lint.
       - name: Duplication ratchet
-        run: npm run check:duplication
+        run: bun run check:duplication
       # Complexity + cognitive: one ESLint walk, two independent baselines (by ruleId).
       - name: Complexity + cognitive ratchets
-        run: npm run check:complexity-ratchets
+        run: bun run check:complexity-ratchets
       # Fase 7 INT: dead-code, type-coverage promovidos de advisory (quality-extended)
       # para BLOQUEANTES aqui. cognitive-complexity is folded into the step above.
       - name: Dead-code ratchet (knip)
-        run: npm run check:dead-code
+        run: bun run check:dead-code
       - name: Type coverage ratchet
-        run: npm run check:type-coverage
+        run: bun run check:type-coverage
       - name: Compression budget ratchet (F2.4 / N4)
-        run: npm run check:compression-budget
+        run: bun run check:compression-budget
       # CodeQL alerts ratchet — BLOQUEANTE (promovido de advisory na v3.8.26).
       # Lê metrics.codeqlAlerts.value de quality-baseline.json e sai 1 SOMENTE numa
       # regressão real (alertas abertos > baseline). Falha de medição (gh/auth/api)
       # é skip gracioso com exit 0 — security-events:read no job-level permissions.
       - name: CodeQL alerts ratchet (blocking)
-        run: npm run check:codeql-ratchet
+        run: bun run check:codeql-ratchet
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Append summary
@@ -303,22 +304,22 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
       # Dead-code, cognitive-complexity, type-coverage foram promovidos ao job
       # quality-gate (bloqueante) na Fase 7 INT — não rodam aqui para evitar duplo custo.
       - name: Circular deps (dpdm; advisory)
         continue-on-error: true
-        run: npm run check:circular-deps
+        run: bun run check:circular-deps
       # BLOCKING ratchet (Etapa 2): bundleSize must not regress vs the baseline
-      # (gzip via @size-limit/file, installed by `npm ci`). --ratchet exits 1 on a
+      # (gzip via @size-limit/file, installed by `bun install --frozen-lockfile`). --ratchet exits 1 on a
       # measured regression; it SKIPs (exit 0) when the size-limit plugin/build is
       # absent (a non-comparable measurement never blocks).
       - name: Bundle size (ratchet, blocking)
-        run: npm run check:bundle-size -- --ratchet
+        run: bun run check:bundle-size -- --ratchet
       # CodeQL ratchet foi PROMOVIDO a BLOQUEANTE no job quality-gate (v3.8.26) —
       # não roda aqui para evitar duplo run/duplo report.
       # Install the advisory security scanners so the gates below actually run
@@ -380,7 +381,7 @@ jobs:
       # --ratchet exits 1 on a measured regression; it SKIPs (exit 0) when gitleaks
       # is absent (a missing binary never blocks).
       - name: Secret scan (gitleaks, ratchet, blocking)
-        run: npm run check:secrets -- --ratchet
+        run: bun run check:secrets -- --ratchet
       # BLOCKING ratchet (v3.8.27 cycle-end): vulnCount must not regress vs the
       # baseline. --ratchet exits 1 on a measured regression (measured > baseline);
       # it SKIPs (exit 0) when osv-scanner is absent or osv.dev is unreachable (a
@@ -388,13 +389,13 @@ jobs:
       # docs/security/SUPPLY_CHAIN.md — a newly-disclosed CVE on an unchanged dep can
       # red this gate; the fix is to bump the dep or re-baseline metrics.vulnCount.
       - name: Vulnerability ratchet (osv-scanner, ratchet, blocking)
-        run: npm run check:vuln-ratchet -- --ratchet
+        run: bun run check:vuln-ratchet -- --ratchet
       # BLOCKING ratchet (Etapa 2): zizmorFindings must not regress vs the baseline.
       # ONLY zizmor is ratcheted — actionlint findings are reported, not blocking.
       # --ratchet exits 1 on a measured zizmor regression; it SKIPs (exit 0) when
       # zizmor is absent (a missing binary never blocks).
       - name: Workflow lint (actionlint+zizmor, ratchet, blocking)
-        run: npm run check:workflows -- --ratchet
+        run: bun run check:workflows -- --ratchet
       # OpenAPI breaking-change detection (oasdiff). Diffs the PR's public API
       # contract (docs/openapi.yaml) against the base branch's spec.
       # BLOCKING ratchet (Fase 9 Onda 0): reads metrics.openapiBreaking.value and
@@ -405,7 +406,7 @@ jobs:
       - name: OpenAPI breaking-change (oasdiff, ratchet, blocking)
         env:
           BASE_REF: ${{ github.base_ref }}
-        run: npm run check:openapi-breaking -- --ratchet
+        run: bun run check:openapi-breaking -- --ratchet
 
   docs-sync-strict:
     name: Docs Sync (Strict)
@@ -419,24 +420,24 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
-      - run: npm run check:docs-all
+      - run: bun run check:docs-all
       # Previously-orphaned contract gates (existed as files, never wired anywhere).
       # All exit 0 today: cli-i18n is a hard gate, openapi-coverage is a ratchet
       # (floor ~36), openapi-security-tiers is advisory (Hard Rules #15/#17).
       - name: CLI i18n consistency
-        run: npm run check:cli-i18n
+        run: bun run check:cli-i18n
       - name: OpenAPI route coverage (ratchet)
-        run: npm run check:openapi-coverage
+        run: bun run check:openapi-coverage
       - name: OpenAPI security-tier consistency (advisory)
-        run: npm run check:openapi-security-tiers
+        run: bun run check:openapi-security-tiers
       # One FS inventory of src/app/api for both anti-hallucination directions.
       - name: API docs refs (openapi + prose → routes)
-        run: npm run check:api-docs-refs
+        run: bun run check:api-docs-refs
       - name: i18n translation drift (warn)
         run: node scripts/i18n/check-translation-drift.mjs --warn
 
@@ -455,12 +456,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - name: markdownlint (docs + root, advisory)
-        run: npx --yes markdownlint-cli2 "docs/**/*.md" "*.md" "!docs/i18n" "!docs/research" || true
+        run: bunx --yes markdownlint-cli2 "docs/**/*.md" "*.md" "!docs/i18n" "!docs/research" || true
       - name: Vale prose lint (Microsoft style, advisory)
         # Non-fatal: a Vale/reviewdog setup error must not turn this advisory job red.
         continue-on-error: true
@@ -487,10 +488,10 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
       - run: node scripts/i18n/check-ui-keys-coverage.mjs --threshold=65
       # #8463: a rewritten English value used to leave its 39 translations behind
@@ -513,10 +514,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
       - run: node scripts/i18n/check-glossary-consistency.mjs --locale=zh-CN
       - run: node scripts/i18n/check-glossary-consistency.mjs --locale=zh-TW
@@ -577,6 +578,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
@@ -586,10 +588,10 @@ jobs:
         run: node scripts/check/check-pr-test-policy.mjs --summary-file .artifacts/pr-test-policy.md
       # Anti test-masking: flag net assert removal / new assert.ok(true) in changed tests.
       - name: Detect test-masking (weakened assertions)
-        run: npm run check:test-masking
+        run: bun run check:test-masking
       # Evidence-in-PR-body (Hard Rule #18 mechanized): claims of "tests pass" must carry output.
       - name: Require evidence in PR body
-        run: npm run check:pr-evidence
+        run: bun run check:pr-evidence
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
       - name: Publish PR test policy summary
@@ -616,12 +618,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
-      - run: npm run check:node-runtime
+      - run: bun run check:node-runtime
       # NOTE: the webpack `.build/next/cache` actions/cache step was removed with the
       # Turbopack switch below — Turbopack does not read/write the webpack cache dir
       # (its persistent FS cache is still experimental and intentionally NOT enabled),
@@ -634,7 +636,7 @@ jobs:
       # /api/monitoring/health 200). Downstream jobs (e2e ×9, package-artifact,
       # electron-package-smoke) consume this artifact, so a green run here validates
       # the Turbopack artifact end-to-end.
-      - run: npm run build
+      - run: bun run build
         env:
           OMNIROUTE_USE_TURBOPACK: "1"
       - name: Archive Next.js build for downstream jobs
@@ -664,12 +666,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
-      - run: npm run check:node-runtime
+      - run: bun run check:node-runtime
       - name: Download Next.js build artifact
         uses: actions/download-artifact@v8
         with:
@@ -680,15 +682,15 @@ jobs:
           tar -xzf /tmp/e2e-build.tar.gz
       # build:cli consumes the downloaded .build/next standalone artifact and assembles dist/;
       # it only rebuilds if the downloaded standalone artifact is missing.
-      - run: npm run build:cli
+      - run: bun run build:cli
       - name: Assert dist/server.js exists
         run: test -f dist/server.js || (echo "dist/server.js missing — build:cli did not assemble correctly" && exit 1)
-      - run: npm run check:pack-artifact
+      - run: bun run check:pack-artifact
       # WS1.2 (#7065 class): pack the real tarball, install it into a clean prefix and
       # BOOT it to a healthy /api/monitoring/health — the gate that structure checks
       # cannot provide (3 releases shipped boot-crashing tarballs with green lists).
       - name: Boot-smoke the packed tarball
-        run: npm run check:pack-boot
+        run: bun run check:pack-boot
 
   electron-package-smoke:
     name: Electron Package Smoke (${{ matrix.os }})
@@ -711,12 +713,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
-      - run: npm run check:node-runtime
+      - run: bun run check:node-runtime
       - name: Download Next.js build artifact
         uses: actions/download-artifact@v8
         with:
@@ -727,11 +729,11 @@ jobs:
           tar -xzf /tmp/e2e-build.tar.gz
       - name: Install Electron dependencies
         working-directory: electron
-        run: npm install --no-audit --no-fund
+        run: bun install
       - name: Pack Electron app
         if: runner.os == 'Linux'
         working-directory: electron
-        run: npm run pack
+        run: bun run pack
       # ADVISORY while the new Windows leg matures (repo convention, dast-smoke
       # precedent): its first-ever real run (2026-07-15, run 29457533565) died in
       # 0.7s with the error swallowed by pwsh — bash shell captures stderr and
@@ -741,12 +743,12 @@ jobs:
         working-directory: electron
         continue-on-error: true
         shell: bash
-        run: npm run prepare:bundle 2>&1
+        run: bun run prepare:bundle 2>&1
       - name: Smoke packaged Electron app
         if: runner.os == 'Linux'
         env:
           ELECTRON_SMOKE_TIMEOUT_MS: 60000
-        run: xvfb-run -a npm run electron:smoke:packaged
+        run: xvfb-run -a bun run electron:smoke:packaged
 
   test-unit:
     name: Unit Tests (${{ matrix.shard }}/8)
@@ -778,12 +780,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
-      - run: npm run check:node-runtime
+      - run: bun run check:node-runtime
       # QW-d (plano mestre): fonte única — o MESMO npm script dos runs locais (adiciona o
       # setupPolyfill que o comando inline omitia; o glob canônico vive só no package.json).
       # D3 (plano mestre): a coverage é coletada NESTE mesmo run (c8/NODE_V8_COVERAGE propaga
@@ -794,13 +796,13 @@ jobs:
           TEST_SHARD: ${{ matrix.shard }}/8
         run: |
           rm -rf coverage-shard coverage-shard-report
-          npx c8 \
+          bunx c8 \
             --temp-directory=coverage-shard \
             --reports-dir=coverage-shard-report \
             --reporter=json \
             --exclude=tests/** \
             --exclude=**/*.test.* \
-            npm run test:unit:ci:shard
+            bun run test:unit:ci:shard
       - name: Upload raw shard coverage
         if: always()
         uses: actions/upload-artifact@v7
@@ -819,12 +821,12 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
-      - run: npm run test:bun:db
+      - run: bun run test:bun:db
 
   test-vitest:
     name: Vitest (MCP / autoCombo / UI components)
@@ -848,20 +850,20 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
       # The second test runner (CLAUDE.md: "Both test runners must pass") — was never
       # wired into CI until the 2026-06-09 quality audit (Fase 6A.2).
       # WS5.2/5.3 (v3.8.49 plan): JUnit output feeds Trunk Flaky Tests (advisory upload
       # below). node:test stays OUT of the first wave (fd1-sensitive reporter stream).
-      - run: npm run test:vitest -- --reporter=default --reporter=junit --outputFile.junit=trunk-junit/vitest-mcp.xml
+      - run: bun run test:vitest -- --reporter=default --reporter=junit --outputFile.junit=trunk-junit/vitest-mcp.xml
       # vitest:ui went back to 870/870 green in the v3.8.49 quality plan (WS6.1,
       # PR #7127 — 69 fails triaged: matchMedia polyfill, node:test→vitest migration,
       # CompareTab D22 cap). Promoted to BLOCKING per the plan's post-merge step.
-      - run: npm run test:vitest:ui -- --reporter=default --reporter=junit --outputFile.junit=trunk-junit/vitest-ui.xml
+      - run: bun run test:vitest:ui -- --reporter=default --reporter=junit --outputFile.junit=trunk-junit/vitest-ui.xml
       # Trunk Flaky Tests upload — advisory (never blocks), own-origin only (fork PRs
       # have no TRUNK_TOKEN). Pinned by SHA (tag v2.1.2).
       - name: Upload test results to Trunk (advisory)
@@ -893,10 +895,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
       - name: Download all shard coverage
         uses: actions/download-artifact@v8
@@ -921,13 +923,13 @@ jobs:
             find . -maxdepth 3 -type f | sort
             exit 1
           fi
-          # Gate aligned to the project's local coverage bar: `npm run test:coverage`
+          # Gate aligned to the project's local coverage bar: `bun run test:coverage`
           # gates at 60/60/60/60, so CI must match it (the previous CI floor of 40
           # silently undershot the local bar — a real drift). Real merged coverage is
           # ~79/79/82/75, so 60 is a conservative floor with headroom; the Fase-4
           # coverage ratchet (quality-baseline.json) layers "must not drop vs baseline"
           # on top of this floor.
-          npx c8 report \
+          bunx c8 report \
             --temp-directory coverage-shards \
             --reports-dir coverage \
             --merge-async \
@@ -1136,19 +1138,19 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
-      - run: npm run check:node-runtime
+      - run: bun run check:node-runtime
       - name: Cache Playwright browsers
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: playwright-chromium-${{ runner.os }}-
-      - run: npx playwright install --with-deps chromium
+      - run: bunx playwright install --with-deps chromium
       - name: Download Next.js build artifact
         uses: actions/download-artifact@v8
         with:
@@ -1171,10 +1173,10 @@ jobs:
             echo "[e2e-balance] shard $SHARD runs:"; echo "$FILES"
             # FILES is our own newline-separated path list, so word-splitting is intended
             # shellcheck disable=SC2086,SC2046
-            npx playwright test $(echo "$FILES" | tr '\n' ' ') --reporter=line,junit
+            bunx playwright test $(echo "$FILES" | tr '\n' ' ') --reporter=line,junit
           else
             echo "[e2e-balance] balancer unavailable — plain --shard fallback"
-            npx playwright test tests/e2e/*.spec.ts --shard="$SHARD"/9 --reporter=line,junit
+            bunx playwright test tests/e2e/*.spec.ts --shard="$SHARD"/9 --reporter=line,junit
           fi
       # WS5.2/5.3: Trunk Flaky Tests upload — advisory, own-origin only, SHA-pinned.
       - name: Upload test results to Trunk (advisory)
@@ -1207,16 +1209,16 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
-      - run: npm run check:node-runtime
+      - run: bun run check:node-runtime
       - name: Integration tests (shard ${{ matrix.shard }}/2)
         env:
           TEST_SHARD: ${{ matrix.shard }}/2
-        run: npm run test:integration:ci
+        run: bun run test:integration:ci
 
   test-security:
     name: Security Tests
@@ -1232,13 +1234,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CI_NODE_VERSION }}
-          cache: npm
       - uses: ./.github/actions/npm-ci-retry
-      - run: npm run check:node-runtime
-      - run: npm run test:security
+      - run: bun run check:node-runtime
+      - run: bun run test:security
 
   ci-summary:
     name: CI Dashboard

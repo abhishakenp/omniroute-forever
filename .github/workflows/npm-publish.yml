@@ -84,7 +84,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Install dependencies (skip scripts to avoid heavy build)
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: bun install --ignore-scripts --no-audit --no-fund
 
       - name: Resolve version, dist-tag and skip flag
         id: resolve
@@ -224,15 +224,15 @@ jobs:
         if: steps.resolve.outputs.skip != 'true'
         env:
           JWT_SECRET: ci-build-secret-with-sufficient-length-for-validation
-        run: npm run build:cli
+        run: bun run build:cli
 
       - name: Validate npm package artifact
         if: steps.resolve.outputs.skip != 'true'
-        run: npm run check:pack-artifact
+        run: bun run check:pack-artifact
 
       - name: Generate CycloneDX SBOM (npm)
         if: steps.resolve.outputs.skip != 'true'
-        run: npx @cyclonedx/cyclonedx-npm --ignore-npm-errors --output-format JSON --output-file sbom-npm.cdx.json
+        run: bunx @cyclonedx/cyclonedx-npm --ignore-npm-errors --output-format JSON --output-file sbom-npm.cdx.json
 
       - name: Upload SBOM (npm) as workflow artifact
         if: steps.resolve.outputs.skip != 'true'
@@ -254,7 +254,7 @@ jobs:
       # real tarball and fails the publish before anything reaches the registry.
       - name: Boot-smoke the tarball before ANY publish
         if: steps.resolve.outputs.skip != 'true'
-        run: npm run check:pack-boot
+        run: bun run check:pack-boot
 
       # The boot-smoke above proves a CLEAN install boots. It does not prove the path that
       # actually broke us: installing over an existing version, where ~110 SQLite migrations
@@ -266,7 +266,7 @@ jobs:
       - name: Prove clean-install AND upgrade-over-previous both boot
         if: steps.resolve.outputs.skip != 'true'
         timeout-minutes: 30
-        run: npm run check:install-upgrade
+        run: bun run check:install-upgrade
 
       # WS1.3 (D2, v3.8.49 plan): STAGED publishing by default — `npm stage publish`
       # parks the exact bytes on the registry WITHOUT making them installable; the
@@ -283,7 +283,7 @@ jobs:
             # Pinned exact version (supply-chain: never float @latest in the publish
             # job); bump deliberately when a newer npm is required.
             echo "npm $CUR < 11.15 — installing pinned npm 11.15.0 for staged publishing"
-            npm install -g --ignore-scripts npm@11.15.0
+            bun install -g --ignore-scripts npm@11.15.0
           fi
           npm --version
 
@@ -320,7 +320,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          npm publish --provenance --access public --tag "$TAG"
+          bun publish --provenance --access public --tag "$TAG"
           echo "✅ Published omniroute@$VERSION (dist-tag=$TAG) [DIRECT mode]"
 
       - name: Publish to GitHub Packages
@@ -334,7 +334,7 @@ jobs:
           echo "Configuring for GitHub Packages..."
           echo "//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}" > .npmrc
           npm pkg set name="@diegosouzapw/omniroute"
-          npm publish --registry=https://npm.pkg.github.com --tag "$TAG" \
+          bun publish --registry=https://npm.pkg.github.com --tag "$TAG" \
             || echo "⚠️ omniroute@${VERSION} might already be published on GitHub Packages."
           echo "✅ Action finished for GitHub Packages"
 
@@ -400,15 +400,15 @@ jobs:
 
       - name: Install plugin dependencies
         working-directory: "@omniroute/opencode-plugin"
-        run: npm install --no-audit --no-fund
+        run: bun install
 
       - name: Build plugin
         working-directory: "@omniroute/opencode-plugin"
-        run: npm run clean && npm run build
+        run: bun run clean && bun run build
 
       - name: Test plugin
         working-directory: "@omniroute/opencode-plugin"
-        run: npm test
+        run: bun run test
 
       - name: Publish @omniroute/opencode-plugin to npm
         working-directory: "@omniroute/opencode-plugin"
@@ -424,5 +424,5 @@ jobs:
             echo "⚠️ ${PKG_NAME}@${PKG_VERSION} is already published on npm — skipping."
             exit 0
           fi
-          npm publish --provenance --access public --ignore-scripts
+          bun publish --provenance --access public --ignore-scripts
           echo "✅ Published ${PKG_NAME}@${PKG_VERSION}"
