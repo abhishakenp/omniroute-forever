@@ -1,0 +1,11 @@
+{
+  "name": "@omniroute/registry",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "What each of 160+ providers is: endpoints, models, aliases, header profiles.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@deepseek-ai/cordis": "*", "@deepseek-ai/schemastery": "*" }
+}

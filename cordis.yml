@@ -1,0 +1,82 @@
+# OmniRoute composition. Order matters only where a row must be in the module
+# cache before a later row imports it: the store opens the database (and so
+# fixes DATA_DIR) before the gateway imports the routing path that reads it.
+- id: logger
+  name: '@deepseek-ai/cordis-plugin-logger-console'
+- id: db
+  name: ./packages/omniroute-db/src/index.ts
+# Swapping the store is a TWO-step edit, not one.
+#
+# Replacing this row's name with ./packages/omniroute-db-memory/src/index.ts in
+# a single save is rejected: cordis's refresh() creates the incoming fiber
+# before it disposes the outgoing one, so both claim ctx.db and the newcomer
+# dies with `service "db" has been registered at <SqliteAdapterService>` while
+# the old store keeps serving. Observed, not assumed.
+#
+# What works, live, in one process: delete the store row and save (the gateway
+# unloads with it and the port closes), then add the replacement row and save.
+# Verified sqlite -> memory -> sqlite on PID 14173 without a restart; /health's
+# `store` field is how you read which one is answering.
+- id: db-sqlite
+  name: ./packages/omniroute-db-sqlite/src/index.ts
+  config:
+    dataDir: ''  # empty = DATA_DIR env, else ~/.omniroute (the store server-elysia uses)
+# ── Convex adapter (hot-swappable with SQLite) ──────────────────────────────
+#
+# To swap from SQLite to Convex:
+#   1. Delete the db-sqlite row above and save (the gateway unloads with it)
+#   2. Uncomment the db-convex and convex-login rows below and save
+#
+# The Convex adapter claims ctx.db — the same seam — so the gateway doesn't
+# notice the swap. The /health endpoint's `store` field shows which adapter
+# is active ("sqlite" or "convex").
+#
+# - id: convex-login
+#   name: ./packages/omniroute-convex-login/src/index.ts
+#   config:
+#     deploymentUrl: ""        # Empty = read from CONVEX_URL env var
+#     apiKey: ""              # Empty = read from CONVEX_API_KEY env var
+#     autoSetup: true         # Run `bunx convex dev --once` if not authenticated
+# - id: db-convex
+#   name: ./packages/omniroute-db-convex/src/index.ts
+#   config:
+#     deploymentUrl: ""        # Empty = read from CONVEX_URL env var
+#     apiKey: ""              # Empty = read from CONVEX_API_KEY env var
+#     closeOnUnload: true
+# ── SQLite → Convex migration (one-time, optional) ──────────────────────────
+#
+# Load this row alongside db-sqlite and convex-login to migrate data.
+# Call `ctx.convexMigrate.migrate()` once, then remove this row.
+#
+# - id: convex-migrate
+#   name: ./packages/omniroute-convex-migrate/src/index.ts
+#   config:
+#     batchSize: 10
+#     skipExisting: true
+- id: keystore
+  name: ./packages/omniroute-keystore/src/index.ts
+- id: omni-log
+  name: ./packages/omniroute-logger/src/index.ts
+  config:
+    dataDir: ''  # empty = DATA_DIR env, else ~/.omniroute (the store server-elysia uses)
+- id: registry
+  name: ./packages/omniroute-registry/src/index.ts
+- id: executor
+  name: ./packages/omniroute-executor/src/index.ts
+- id: provisioner
+  name: ./packages/omniroute-provisioner/src/index.ts
+- id: gateway
+  name: ./packages/omniroute-gateway/src/index.ts
+  config:
+    port: 20131
+    # The live launchd job sets OMNIROUTE_MAX_CONCURRENT=12; here the same
+    # number is composition, not environment, so it is visible in the file that
+    # describes the deployment rather than in a plist nobody reads.
+    maxConcurrent: 12
+- id: provisioner-sdk
+  name: ./packages/omniroute-provisioner-sdk/src/index.ts
+  config:
+    # The live account-provisioner. Every method on this row is a read except
+    # `trigger()`, which creates a real account against a real external provider
+    # and spends real quota — so nothing calls it at boot, and nothing should.
+    endpoint: http://localhost:20129

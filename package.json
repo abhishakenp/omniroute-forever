@@ -236,6 +236,12 @@
     "test:unit:serial": "cross-env DISABLE_SQLITE_AUTO_BACKUP=true node --max-old-space-size=4096 --import tsx/esm --import ./open-sse/utils/setupPolyfill.ts --import ./tests/_setup/isolateDataDir.ts --test --test-force-exit --test-concurrency=1 \"tests/unit/serial/**/*.test.ts\""
   },
   "dependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/cordis-plugin-include": "^1.0.7",
+    "@deepseek-ai/cordis-plugin-loader": "^1.0.2",
+    "@deepseek-ai/cordis-plugin-logger-console": "^1.0.2",
+    "@deepseek-ai/cordis-plugin-timer": "^1.1.4",
+    "@deepseek-ai/schemastery": "^3.16.2",
     "@sinclair/typebox": "^0.34.52",
     "@swc/helpers": "0.5.23",
     "bcryptjs": "^3.0.3",
@@ -266,7 +272,8 @@
     "ws": "^8.18.0",
     "xxhash-wasm": "^1.1.0",
     "yazl": "^3.3.1",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "convex": "^1.45.0"
   },
   "optionalDependencies": {
     "keytar": "^7.9.0"
