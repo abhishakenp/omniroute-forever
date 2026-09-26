@@ -2,8 +2,8 @@ import { createRequire } from "node:module";
 
 // Lazy executor module loading.
 //
-// All 7 executor modules (default, pollinations, opencode, puter, huggingchat,
-// lmarena, auggie) — plus their shared base.ts — are loaded on demand via
+// All 9 executor modules (default, pollinations, opencode, puter, huggingchat,
+// lmarena, auggie, duckduckgo-web, felo-web) — plus their shared base.ts — are loaded on demand via
 // createRequire-backed lazy getters. A module is only pulled into memory the
 // first time its provider is actually requested through getExecutor(). This
 // avoids loading every executor (default.ts alone is ~1100 lines, base.ts ~1660)
@@ -62,6 +62,18 @@ function getAuggieExecutor(): ExecClass {
   return _AuggieExecutor;
 }
 
+let _DuckDuckGoWebExecutor: ExecClass | null = null;
+function getDuckDuckGoWebExecutor(): ExecClass {
+  if (!_DuckDuckGoWebExecutor) _DuckDuckGoWebExecutor = require("./duckduckgo-web.ts").DuckDuckGoWebExecutor;
+  return _DuckDuckGoWebExecutor;
+}
+
+let _FeloWebExecutor: ExecClass | null = null;
+function getFeloWebExecutor(): ExecClass {
+  if (!_FeloWebExecutor) _FeloWebExecutor = require("./felo-web.ts").FeloWebExecutor;
+  return _FeloWebExecutor;
+}
+
 // Centralised constructor: the factory map holds no eager class construction —
 // every instance is built lazily inside a factory thunk that is only invoked by
 // getExecutor() on first request for a provider id.
@@ -82,6 +94,8 @@ const executorFactories: Record<string, ExecutorFactory> = {
   lmarena: () => construct(getLMArenaExecutor()),
   lma: () => construct(getLMArenaExecutor()), // Alias
   auggie: () => construct(getAuggieExecutor()),
+  "duckduckgo-web": () => construct(getDuckDuckGoWebExecutor()),
+  "felo-web": () => construct(getFeloWebExecutor()),
 };
 
 // Cached specialized executor instances (one per provider id). Named without

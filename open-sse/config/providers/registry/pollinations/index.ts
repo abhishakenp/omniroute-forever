@@ -9,7 +9,7 @@ export const pollinationsProvider: RegistryEntry = {
   id: "pollinations",
   alias: "pol",
   format: "openai",
-  executor: "pollinations",
+  executor: "default",
   // #2987: Pollinations retired the legacy text.pollinations.ai host (it now
   // returns 404 "This is our legacy API"). The current OpenAI-compatible gateway
   // is gen.pollinations.ai/v1, so route there as the primary endpoint.
