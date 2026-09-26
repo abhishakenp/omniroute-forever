@@ -26,6 +26,7 @@ import { decryptConnectionFields } from "./encryption.ts";
 import { getProviderRegistry } from "../../../open-sse/services/autoCombo/providerRegistryAccessor.ts";
 import type { RegistryEntry } from "../../../open-sse/config/providers/shared.ts";
 import { selectFittingModels, type ModelLike } from "./modelFitness.ts";
+import { parseProviderSpecificData } from "./webSessionDedup.ts";
 
 /**
  * True when a registry provider can serve a request with no stored credential.
@@ -53,7 +54,42 @@ function isKeylessRegistryProvider(entry: RegistryEntry): boolean {
  * new credentials, an operator action, or the provisioner — retrying it is pure
  * waste. Mirrors `isTerminalConnectionStatus` (src/sse/services/auth.ts).
  */
-const TERMINAL_STATUSES = ["expired", "banned"] as const;
+import {
+  loadKeylessHealth,
+  recordKeylessFailure,
+  clearKeylessFailure,
+  loadIncapableModels,
+  isKeylessConnectionId,
+  providerFromKeylessId,
+} from "./keylessHealth.ts";
+
+const TERMINAL_STATUSES = ["expired", "banned", "revoked"] as const;
+
+/**
+ * When a credential stops being "broken right now" and becomes "gone".
+ *
+ * The comment on SOFT_FAILURE_STATUSES below is right that one 401 proves
+ * nothing — a rotated key, a refresh blip and a revoked credential are
+ * identical at the HTTP layer, and writing a headstone on the first one is how
+ * this pool lost 163 connections before. But the opposite error has a cost
+ * too, and it is the one running now: 355 connections on this machine carry an
+ * auth failure and `is_active = 1`, 215 of them on mistral alone, some at
+ * `backoff_level` 30. Every one is retried forever, and every retry spends an
+ * attempt out of the 60s budget a real request has before it gets a 503.
+ *
+ * The number of *consecutive* failures is what separates the two cases, and
+ * `backoff_level` already counts exactly that: markFailed increments it,
+ * markSucceeded clears it, so a level of N means N failures with no success in
+ * between. With the escalating schedule (5m, 10m, 20m … capped at 12h), level
+ * 12 is reached only after roughly seventy hours of retrying. Nothing that a
+ * rotation, a refresh or an upstream blip would have fixed is still failing
+ * after seventy hours of attempts.
+ *
+ * Deliberately auth-only. `credits_exhausted` keeps its cooldown and its way
+ * back, because a free tier's quota really does reset on a clock and killing
+ * those is the exact mistake documented above.
+ */
+export const AUTH_DEAD_AFTER_LEVEL = 12;
 
 /**
  * Quota exhaustion is NOT terminal, and treating it as terminal cost this pool
@@ -311,6 +347,16 @@ export interface TargetRow {
   authType: string | null;
   defaultModel: string | null;
   priority: number;
+  /**
+   * Connection-specific base URL from `provider_specific_data.baseUrl`.
+   *
+   * Local providers (vllm, ollama-local, lm-studio, llama-cpp, …) are NOT in
+   * the OpenSSE routing REGISTRY — they live in LOCAL_PROVIDERS for the
+   * dashboard. Each connection carries its own upstream URL in
+   * `provider_specific_data.baseUrl`, and the thin gateway must read it
+   * here rather than looking up a registry entry that does not exist.
+   */
+  baseUrl: string | null;
 }
 
 // Track which connections we've already tried in this request so we don't retry them.
@@ -324,10 +370,25 @@ export class TargetIterator {
   private excludedProviders: Set<string>;
   private specificProvider: string | null;
   private specificModel: string | null;
+  /**
+   * Consumer tag this request routes for (e.g. "iris/always"), or null for
+   * general traffic. Reserved connections (`reserved_for IS NOT NULL`) are
+   * invisible to general traffic — an explicit invariant, not an optimisation:
+   * a key set aside for one consumer must never be spent by anyone else.
+   */
+  private reservedFor: string | null;
   /** Size of the request being routed — models too small for it are not candidates. */
   private promptTokens: number;
   private outputTokens: number;
   private refusedAbove: Map<string, number>;
+  /**
+   * Cooldowns for keyless (`noauth-*`) targets, which own no
+   * `provider_connections` row and so had nowhere to record a failure.
+   * See keylessHealth.ts.
+   */
+  private keylessHealth: Map<string, { level: number; until: number }>;
+  /** `provider/model` pairs an upstream has said it cannot chat with — permanent. */
+  private incapableModels: Set<string>;
 
   constructor(
     opts: {
@@ -339,6 +400,12 @@ export class TargetIterator {
       promptTokens?: number;
       /** Tokens the reply may occupy, which the window must also hold. */
       outputTokens?: number;
+      /**
+       * Consumer tag (e.g. "iris/always"). When set, connections reserved for
+       * this tag are tried first and the general pool is the fallback. When
+       * unset, reserved connections are excluded entirely.
+       */
+      reservedFor?: string;
     } = {}
   ) {
     this.freeProvidersOnly = opts.freeProvidersOnly ?? false;
@@ -347,7 +414,15 @@ export class TargetIterator {
     this.specificModel = opts.specificModel ?? null;
     this.promptTokens = opts.promptTokens ?? 0;
     this.outputTokens = opts.outputTokens ?? 0;
+    this.reservedFor = opts.reservedFor ?? null;
     this.refusedAbove = this.promptTokens > 0 ? loadRefusalCeilings(this.db) : new Map();
+    this.keylessHealth = loadKeylessHealth(this.db);
+    this.incapableModels = loadIncapableModels(this.db);
+  }
+
+  /** True when a model has been proven permanently unable to serve chat. */
+  private isIncapable(modelStr: string): boolean {
+    return this.incapableModels.has(modelStr);
   }
 
   /**
@@ -368,20 +443,33 @@ export class TargetIterator {
         ? ` AND provider IN (${freeIds.map(() => "?").join(", ")})`
         : "";
 
-    // Params order: [specificProvider?, ...freeIds?, now, now]
-    //   — CANDIDATE_PREDICATE binds `now` twice.
+    // Reservation filter. A reserved connection belongs to exactly one
+    // consumer: general traffic must never see it (hence the `IS NULL` arm
+    // when no tag is set), and a tagged request sees its own reserved rows
+    // plus the general pool as fallback.
+    const reservedFilter = this.reservedFor
+      ? ` AND (reserved_for IS NULL OR reserved_for = ?)`
+      : ` AND reserved_for IS NULL`;
+    // Reserved rows sort ahead of the general pool so the dedicated key is
+    // spent first and the shared pool only catches the overflow.
+    const reservedOrder = this.reservedFor ? `(reserved_for IS NOT NULL) DESC, ` : "";
+
+    // Params order: [specificProvider?, ...freeIds?, reservedFor?, now, now]
+    //   — matches the `?` order in the SQL below: providerFilter, freeFilter,
+    //     reservedFilter, then CANDIDATE_PREDICATE which binds `now` twice.
     const params: unknown[] = [];
     if (this.specificProvider) params.push(this.specificProvider);
     params.push(...freeIds);
+    if (this.reservedFor) params.push(this.reservedFor);
     params.push(now, now);
 
     const rows = this.db
       .prepare(
-        `SELECT id, provider, api_key, auth_type, default_model, priority, test_status, rate_limited_until
+        `SELECT id, provider, api_key, auth_type, default_model, priority, test_status, rate_limited_until, provider_specific_data
          FROM provider_connections
          WHERE is_active = 1
-           ${providerFilter}${freeFilter}${CANDIDATE_PREDICATE}
-         ORDER BY priority DESC, backoff_level ASC, last_used_at ASC
+           ${providerFilter}${freeFilter}${reservedFilter}${CANDIDATE_PREDICATE}
+         ORDER BY ${reservedOrder}priority DESC, backoff_level ASC, last_used_at ASC
          LIMIT 200`
       )
       .all(...params) as Array<{
@@ -391,33 +479,59 @@ export class TargetIterator {
       auth_type: string | null;
       default_model: string | null;
       priority: number;
+      provider_specific_data: string | null;
     }>;
+
+    // Batch-fetch synced models for ALL candidate providers in ONE query,
+    // instead of one query per connection (the N+1 that produced up to 202
+    // SQLite queries per nextTarget() call). Group by provider so the loop
+    // below can look up models without touching the database again.
+    // Keys are stored as '<providerId>:<connectionId>' or bare '<providerId>'.
+    const candidateProviders = new Set(rows.map((r) => r.provider));
+    const syncedModels = new Map<string, ModelLike[]>();
+    if (candidateProviders.size > 0) {
+      // One LIKE pattern per provider: 'provider:%' matches sub-keys; the
+      // bare provider key is matched by the first LIKE too (prefix match on
+      // 'provider:' would miss the bare key, so we also check equality).
+      // Using a single query with OR is simpler and still one round-trip.
+      const likePatterns = [...candidateProviders].flatMap((p) => [p, `${p}:%`]);
+      const placeholders = likePatterns.map(() => "?").join(", ");
+      const modelRows = this.db
+        .prepare(
+          `SELECT key, value FROM key_value
+           WHERE namespace = 'syncedAvailableModels'
+             AND key IN (${placeholders})`
+        )
+        .all(...likePatterns) as Array<{ key: string; value: string }>;
+      for (const row of modelRows) {
+        // Extract the provider from the key (either bare 'provider' or 'provider:connId')
+        const provider = row.key.split(":")[0];
+        if (!syncedModels.has(provider)) {
+          try {
+            const parsed = JSON.parse(row.value);
+            if (Array.isArray(parsed)) syncedModels.set(provider, parsed as ModelLike[]);
+          } catch {
+            // ignore JSON parse errors
+          }
+        }
+      }
+    }
 
     for (const conn of rows) {
       if (this.triedConnectionIds.has(conn.id)) continue;
       if (this.excludedProviders.has(conn.provider)) continue;
 
-      // Get synced models for this connection's provider
-      const modelRows = this.db
-        .prepare(
-          `SELECT value FROM key_value
-           WHERE namespace = 'syncedAvailableModels'
-             AND (key = ? OR key LIKE ?)
-           LIMIT 1`
-        )
-        .get(conn.provider, `${conn.provider}:%`) as { value: string } | undefined;
+      // Look up the batched models for this connection's provider — no
+      // per-connection query. The old code did one SELECT per connection
+      // here, which was the N+1.
+      const modelRows = syncedModels.get(conn.provider);
 
       // Keep the WHOLE model record, not just the id: `inputTokenLimit` is the
       // only thing that can tell a 436k-window model from an 8,992-token one,
       // and dropping it here is what made every candidate look interchangeable.
       let models: ModelLike[] = [];
-      if (modelRows?.value) {
-        try {
-          const parsed = JSON.parse(modelRows.value);
-          if (Array.isArray(parsed)) models = parsed as ModelLike[];
-        } catch {
-          // ignore JSON parse errors
-        }
+      if (modelRows) {
+        models = modelRows;
       }
 
       const registryForModels = getProviderRegistry();
@@ -467,6 +581,21 @@ export class TargetIterator {
           idToken: undefined,
         });
 
+        // Extract the connection-specific base URL for local providers (vllm,
+        // ollama-local, lm-studio, …). These providers are not in the OpenSSE
+        // routing REGISTRY; each connection carries its own upstream URL in
+        // provider_specific_data.baseUrl, and the thin gateway reads it from
+        // the target row instead of a registry lookup that would miss.
+        const psd = parseProviderSpecificData(conn.provider_specific_data);
+        const connBaseUrl =
+          psd && typeof psd.baseUrl === "string" && psd.baseUrl.trim()
+            ? psd.baseUrl.trim()
+            : null;
+
+        // A model the upstream has said it cannot chat with is not a candidate,
+        // no matter how healthy the credential in front of it is.
+        if (this.isIncapable(`${conn.provider}/${modelId}`)) continue;
+
         return {
           connectionId: conn.id,
           provider: conn.provider,
@@ -476,6 +605,7 @@ export class TargetIterator {
           authType: conn.auth_type,
           defaultModel: conn.default_model,
           priority: conn.priority,
+          baseUrl: connBaseUrl,
         };
       }
     }
@@ -515,9 +645,17 @@ export class TargetIterator {
       ).map((r) => r.provider)
     );
 
+    const nowMs = Date.now();
     for (const [providerId, entry] of noAuthEntries) {
       if (this.excludedProviders.has(providerId)) continue;
       if (quarantinedProviders.has(providerId)) continue;
+      // Keyless providers own no connection row, so `quarantinedProviders`
+      // (a GROUP BY over provider_connections) can never contain them — a
+      // provider with zero rows produces no group. Their cooldown lives in
+      // key_value instead; without this check a rate-limited scraper was
+      // re-offered on every single request. See keylessHealth.ts.
+      const health = this.keylessHealth.get(providerId);
+      if (health && health.until > nowMs) continue;
       // Same free-only restriction as the connection query above.
       if (this.freeProvidersOnly && !getFreeProviderIds().has(providerId)) continue;
       if (!isKeylessRegistryProvider(entry)) continue;
@@ -535,6 +673,7 @@ export class TargetIterator {
         if (!modelId) continue;
         // For specific provider requests, filter to the requested model
         if (this.specificModel && modelId !== this.specificModel) continue;
+        if (this.isIncapable(`${providerId}/${modelId}`)) continue;
         const key = `${providerId}:${modelId}`;
         if (this.triedProviderModels.has(key)) continue;
         this.triedProviderModels.add(key);
@@ -548,6 +687,7 @@ export class TargetIterator {
           authType: "none",
           defaultModel: null,
           priority: -1, // no-auth providers are lower priority
+          baseUrl: null,
         };
       }
     }
@@ -560,6 +700,19 @@ export class TargetIterator {
    * Updates SQLite directly so the next nextTarget() call skips it.
    */
   markFailed(connectionId: string, status: number, cooldownMs: number = 60_000): void {
+    // Keyless targets have no row to UPDATE. Every branch below ends in
+    // `WHERE id = ?` against provider_connections, so for a `noauth-*` id the
+    // statement matched 0 rows and the failure was thrown away — which is how
+    // felo-web and duckduckgo-web accumulated ~21k 429s between them without
+    // ever cooling down. Route them to their own store instead.
+    if (isKeylessConnectionId(connectionId)) {
+      const provider = providerFromKeylessId(connectionId);
+      const health = recordKeylessFailure(this.db, provider, cooldownMs);
+      // Keep the in-memory view consistent so the SAME request does not
+      // re-offer the provider before the next iterator is constructed.
+      if (health) this.keylessHealth.set(provider, health);
+      return;
+    }
     const retryAfter = new Date(Date.now() + cooldownMs).toISOString();
     if (status === 429) {
       this.db
@@ -582,6 +735,28 @@ export class TargetIterator {
         .prepare(`SELECT backoff_level FROM provider_connections WHERE id = ?`)
         .get(connectionId) as { backoff_level: number | null } | undefined;
       const nextLevel = Math.max(0, row?.backoff_level ?? 0) + 1;
+      // ... until it has failed enough consecutive times that "blip" stops
+      // being a possible explanation. See AUTH_DEAD_AFTER_LEVEL: this is the
+      // point where the row stops costing every future request an attempt.
+      if (nextLevel >= AUTH_DEAD_AFTER_LEVEL) {
+        this.db
+          .prepare(
+            `UPDATE provider_connections
+             SET test_status = 'revoked',
+                 backoff_level = ?,
+                 rate_limited_until = NULL,
+                 last_error = ?,
+                 last_error_at = ?
+             WHERE id = ?`
+          )
+          .run(
+            nextLevel,
+            `HTTP ${status} — retired after ${nextLevel} consecutive auth failures`,
+            new Date().toISOString(),
+            connectionId
+          );
+        return;
+      }
       const softRetryAfter = new Date(Date.now() + softBackoffMs(nextLevel - 1)).toISOString();
       this.db
         .prepare(
@@ -633,6 +808,14 @@ export class TargetIterator {
    * Mark a target as succeeded — update last_used_at for LKGP-style ordering.
    */
   markSucceeded(connectionId: string): void {
+    // Keyless targets clear their backoff in key_value, not in a row. A scraper
+    // that recovers must come straight back — no headstones.
+    if (isKeylessConnectionId(connectionId)) {
+      const provider = providerFromKeylessId(connectionId);
+      clearKeylessFailure(this.db, provider);
+      this.keylessHealth.delete(provider);
+      return;
+    }
     // A success is proof the credential works, so clear the soft-failure state
     // outright — otherwise a connection that recovered would keep its 'error'
     // status and its escalating backoff, and would be pushed to the back of the

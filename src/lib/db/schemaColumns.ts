@@ -24,6 +24,10 @@ export function ensureProviderConnectionsColumns(db: SqliteDatabase) {
       ["email", "TEXT"],
       ["display_name", "TEXT"],
       ["provider_specific_data", "TEXT"],
+      // Consumer reservation tag (migration 143). NULL = general pool.
+      // Healed here too because the boot path reads this column before the
+      // migration runner has necessarily reached 143 on a legacy file.
+      ["reserved_for", "TEXT"],
     ]) {
       if (!columnNames.has(column)) {
         db.exec(`ALTER TABLE provider_connections ADD COLUMN ${column} ${type}`);
@@ -89,6 +93,15 @@ export function ensureProviderConnectionsColumns(db: SqliteDatabase) {
     );
     db.exec(
       "CREATE INDEX IF NOT EXISTS idx_pc_provider_auth_type ON provider_connections(provider, auth_type)"
+    );
+    // Companion index for the reserved_for column healed above. It cannot live
+    // only in migration 143: this healer runs BEFORE runMigrations (core.ts),
+    // so by the time 143 executes the column already exists, its ALTER throws
+    // "duplicate column name", the runner marks it applied — and because the
+    // whole migration body is one transaction, the CREATE INDEX that followed
+    // is rolled back and never runs. Same reason idx_pc_max_concurrent lives here.
+    db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_provider_connections_reserved_for ON provider_connections(reserved_for)"
     );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

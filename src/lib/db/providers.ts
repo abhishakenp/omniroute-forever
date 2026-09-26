@@ -611,6 +611,7 @@ export async function createProviderConnection(data: JsonRecord) {
     "quotaWindowThresholds",
     "rateLimitOverrides",
     "healthCheckInterval",
+    "reservedFor",
   ];
   for (const field of optionalFields) {
     if (data[field] !== undefined && data[field] !== null) {
@@ -667,7 +668,7 @@ function _insertConnectionRow(db: DbLike, conn: JsonRecord) {
       expires_in, display_name, global_priority, default_model,
       token_type, consecutive_use_count, rate_limit_protection, last_used_at, "group", max_concurrent,
       proxy_enabled, per_key_proxy_enabled, quota_visible, quota_window_thresholds_json, rate_limit_overrides_json,
-      created_at, updated_at
+      reserved_for, created_at, updated_at
     ) VALUES (
       @id, @provider, @authType, @name, @email, @priority, @isActive,
       @accessToken, @refreshToken, @expiresAt, @tokenExpiresAt,
@@ -678,7 +679,7 @@ function _insertConnectionRow(db: DbLike, conn: JsonRecord) {
       @expiresIn, @displayName, @globalPriority, @defaultModel,
       @tokenType, @consecutiveUseCount, @rateLimitProtection, @lastUsedAt, @group, @maxConcurrent,
       @proxyEnabled, @perKeyProxyEnabled, @quotaVisible, @quotaWindowThresholdsJson, @rateLimitOverridesJson,
-      @createdAt, @updatedAt
+      @reservedFor, @createdAt, @updatedAt
     )
   `
   ).run({
@@ -727,6 +728,8 @@ function _insertConnectionRow(db: DbLike, conn: JsonRecord) {
     quotaVisible: normalizeBooleanColumn(conn.quotaVisible, true) ? 1 : 0,
     quotaWindowThresholdsJson: serializeJsonField(conn.quotaWindowThresholds),
     rateLimitOverridesJson: serializeJsonField(conn.rateLimitOverrides),
+    // Consumer reservation tag; empty/absent means the general pool.
+    reservedFor: conn.reservedFor || null,
     createdAt: conn.createdAt,
     updatedAt: conn.updatedAt,
   });
@@ -782,6 +785,7 @@ function _buildUpdateConnectionRowParams(id: string, data: JsonRecord, now: unkn
     perKeyProxyEnabled: normalizeBooleanColumn(data.perKeyProxyEnabled, false) ? 1 : 0,
     quotaVisible: normalizeBooleanColumn(data.quotaVisible, true) ? 1 : 0,
     rateLimitOverridesJson: serializeJsonField(data.rateLimitOverrides),
+    reservedFor: data.reservedFor || null,
     lastPingAt: data.lastPingAt || null,
     lastPingedResetKey: data.lastPingedResetKey || null,
     updatedAt: now,
@@ -814,6 +818,7 @@ function _updateConnectionRow(db: DbLike, id: string, data: JsonRecord) {
       per_key_proxy_enabled = @perKeyProxyEnabled,
       quota_visible = @quotaVisible,
       rate_limit_overrides_json = @rateLimitOverridesJson,
+      reserved_for = @reservedFor,
       last_ping_at = @lastPingAt,
       last_pinged_reset_key = @lastPingedResetKey,
       updated_at = @updatedAt

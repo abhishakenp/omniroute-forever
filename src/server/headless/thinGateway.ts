@@ -14,11 +14,127 @@
 import { TargetIterator, type TargetRow } from "../../lib/db/targetIterator.ts";
 import { getProviderRegistry } from "../../../open-sse/services/autoCombo/providerRegistryAccessor.ts";
 import { errorResponse } from "../../../open-sse/utils/error.ts";
-import { triggerProviderProvisioning } from "../../sse/services/provisionerHook.ts";
+import { failureResponse } from "./failureDomain.ts";
+import {
+  triggerProviderProvisioning,
+  deleteProvisionerAccount,
+  isProvisioningUnderway,
+} from "../../sse/services/provisionerHook.ts";
 import { getExecutor, hasSpecializedExecutor } from "../../../open-sse/executors/index.ts";
 import type { RegistryEntry } from "../../../open-sse/config/providers/shared.ts";
 import { estimatePromptTokens, requestedOutputTokens } from "../../lib/db/modelFitness.ts";
 import { recordTokenRefusal } from "../../lib/db/targetIterator.ts";
+import { recordModelIncapable, isModelIncapableRefusal } from "../../lib/db/keylessHealth.ts";
+import * as log from "../../sse/utils/logger";
+import {
+  guardToolCallStream,
+  needsToolPlanning,
+  planToolTargets,
+  recordToolOutcome,
+  requestHasTools,
+  requestKey,
+} from "./toolCallGuard.ts";
+
+/**
+ * ─── the store seam ────────────────────────────────────────────────────────
+ *
+ * This router used to name SQLite in five places: it constructed a
+ * `TargetIterator` twice, opened a raw `getDbInstance().prepare(...)` to ask
+ * which providers were rate limited, and reached for the handle again to record
+ * the two things it learns from a refusal. Every one of those is a question
+ * about *connections*, not about SQLite, and none of them had any business
+ * knowing which store answered.
+ *
+ * So they are four methods on `RouterStore` now, and the default implementation
+ * below is the same SQLite code, moved rather than rewritten. **Nothing about
+ * the live path changes**: `server-elysia.ts` installs nothing, so it gets
+ * `sqliteStore`, which does exactly what the inline code did, in the same
+ * order, with the same lazy `import()` of `core.ts` that keeps `DATA_DIR`
+ * resolvable after a host has set it.
+ *
+ * What it buys is that a host *may* install something else — and the cordis
+ * gateway row does, handing over `ctx.db`. That is the whole of Scope 8: the
+ * seam is only a seam if the consumer actually goes through it.
+ *
+ * The cursor type is declared structurally rather than imported from
+ * `@omniroute/db`, deliberately. `src/` must not depend on `packages/`: the
+ * live launchd job boots `server-elysia.ts` out of `src/`, and giving it an
+ * import into a package tree that only the cordis branch has would make the
+ * production entrypoint unbootable the first time the two diverged.
+ */
+export interface TargetCursorLike {
+  nextTarget(): TargetRow | null;
+  markFailed(connectionId: string, status: number, cooldownMs?: number): void;
+  markSucceeded(connectionId: string): void;
+  readonly triedProviders: Set<string>;
+}
+
+export interface TargetQueryLike {
+  freeProvidersOnly?: boolean;
+  specificProvider?: string;
+  specificModel?: string;
+  promptTokens?: number;
+  outputTokens?: number;
+  reservedFor?: string;
+}
+
+export interface RouterStore {
+  createTargetCursor(query: TargetQueryLike): TargetCursorLike;
+  rateLimitedProviders(): Promise<string[]>;
+  recordTokenRefusal(modelStr: string, promptTokens: number): Promise<void>;
+  recordModelIncapable(modelStr: string, reason: string): Promise<void>;
+}
+
+/** The store this file has always used, unchanged, now behind a name. */
+const sqliteStore: RouterStore = {
+  createTargetCursor: (query) => new TargetIterator(query),
+  rateLimitedProviders: async () => {
+    const { getDbInstance } = await import("../../lib/db/core.ts");
+    const rows = getDbInstance()
+      .prepare(
+        `SELECT DISTINCT provider FROM provider_connections
+         WHERE is_active = 1 AND rate_limited_until IS NOT NULL`
+      )
+      .all() as Array<{ provider: string }>;
+    return rows.map((r) => r.provider).filter(Boolean);
+  },
+  recordTokenRefusal: async (modelStr, promptTokens) => {
+    const { getDbInstance } = await import("../../lib/db/core.ts");
+    recordTokenRefusal(getDbInstance(), modelStr, promptTokens);
+  },
+  recordModelIncapable: async (modelStr, reason) => {
+    const { getDbInstance } = await import("../../lib/db/core.ts");
+    recordModelIncapable(getDbInstance(), modelStr, reason);
+  },
+};
+
+let installedStore: RouterStore | null = null;
+
+/**
+ * Point the router at a store.
+ *
+ * Returns the undo, rather than exposing a `clear()`: a host that installs one
+ * during `Service.init` needs to put back exactly what was there when it
+ * unloads, and "exactly what was there" is not always the default — during a
+ * hot-swap two rows are briefly alive at once, and a clear() would leave the
+ * survivor pointing at SQLite.
+ */
+export function setRouterStore(store: RouterStore): () => void {
+  const previous = installedStore;
+  installedStore = store;
+  return () => {
+    // Only stand down if nobody has installed over us since; otherwise the
+    // successor's store would be replaced by our predecessor's on our unload,
+    // which is the exact reload-ordering bug this shape exists to avoid.
+    if (installedStore === store) installedStore = previous;
+  };
+}
+
+/** Whoever is installed, else SQLite. Never null — a router with no store cannot route. */
+export function getRouterStore(): RouterStore {
+  return installedStore ?? sqliteStore;
+}
+
 
 // NOTE: a hardcoded FREE_PROVIDERS set used to live here, unreferenced. It was
 // also wrong — it omitted dahl, llm7, uncloseai and bazaarlink, all free and all
@@ -34,6 +150,18 @@ import { recordTokenRefusal } from "../../lib/db/targetIterator.ts";
 const SKIP_PROVIDERS = new Set([
   "aihorde", // needs API key header, not Bearer
 ]);
+
+/**
+ * Consumer namespaces that are RESERVED ALIASES, not provider/model pairs.
+ *
+ * "iris/always" names the consumer asking, not an upstream: parsed as
+ * provider/model it would look for a provider called "iris" and match
+ * nothing. A request on one of these prefixes routes against the whole pool
+ * with `reservedFor` set, so keys reserved for that consumer are tried first
+ * and the general pool is the fallback. Adding another consumer (e.g.
+ * "rlm/") is one entry here.
+ */
+const RESERVED_ALIAS_PREFIXES = ["iris/"];
 
 /**
  * How much of an upstream error body to read.
@@ -125,6 +253,25 @@ const RATE_LIMIT_COOLDOWN_MS = 60_000;
 // How long to wait for provisioner to produce a new key.
 const PROVISIONER_WAIT_MS = 30_000;
 
+// Providers whose free tiers reset on a long clock (hourly/daily), not per
+// request. A 60s cooldown on these produced thousands of doomed retries in
+// the logs — the provider is still rate-limited 60s later, so the next
+// request tries it again and fails again. Use a longer cooldown that matches
+// the actual reset window.
+const LONG_RESET_PROVIDERS = new Set([
+  "dahl", // free tier resets on a daily clock
+  "felo-web", // thread creation rate-limited for long windows
+  "duckduckgo-web", // VQD token acquisition rate-limited
+  "mistral", // daily token quota
+  "llm", // daily token quota (codestral)
+  "uncloseai", // context length refusals are permanent per model
+]);
+const LONG_RESET_COOLDOWN_MS = 5 * 60_000; // 5 min — matches observed reset windows
+
+function rateLimitCooldown(provider: string): number {
+  return LONG_RESET_PROVIDERS.has(provider) ? LONG_RESET_COOLDOWN_MS : RATE_LIMIT_COOLDOWN_MS;
+}
+
 interface GatewayRequest {
   body: Record<string, unknown>;
   model: string; // "auto/best-free" or "provider/model"
@@ -140,13 +287,20 @@ export async function handleThinGateway(req: GatewayRequest): Promise<Response> 
   const startTime = Date.now();
   const isAuto = req.model.startsWith("auto/");
   const isFreeOnly = req.model === "auto/best-free" || req.model.includes(":free");
+  // A reserved alias ("iris/always") is a consumer tag, not a provider/model
+  // pair. Without this it would parse as provider "iris", model "always",
+  // which matches nothing and fails the request outright.
+  const reservedAlias = RESERVED_ALIAS_PREFIXES.some((prefix) => req.model.startsWith(prefix))
+    ? req.model
+    : undefined;
+  const isAutoOrReserved = isAuto || !!reservedAlias;
 
   // For direct provider/model requests (e.g. "mistral/mistral-large-latest"),
   // create an iterator scoped to that specific provider+model.
   // For auto/* requests, use the full iterator.
   let specificProvider: string | undefined;
   let specificModel: string | undefined;
-  if (!isAuto) {
+  if (!isAutoOrReserved) {
     const slashIdx = req.model.indexOf("/");
     if (slashIdx > 0) {
       specificProvider = req.model.slice(0, slashIdx);
@@ -160,69 +314,110 @@ export async function handleThinGateway(req: GatewayRequest): Promise<Response> 
   const promptTokens = estimatePromptTokens(req.body);
   const outputTokens = requestedOutputTokens(req.body);
 
-  const iterator = new TargetIterator({
+  // Every question this handler asks about connections goes through here.
+  const store = getRouterStore();
+  const iterator = store.createTargetCursor({
     freeProvidersOnly: isFreeOnly,
     specificProvider,
     specificModel,
     promptTokens,
     outputTokens,
+    reservedFor: reservedAlias,
   });
 
   const registry = getProviderRegistry();
   let attempts = 0;
   const errors: Array<{ model: string; status: number; message: string }> = [];
+  // Streamed tool requests are watched for swallowed tool calls. A client's
+  // retry of one that dropped may be re-planned onto a model with a better
+  // measured tool success rate. See toolCallGuard.ts for the measurements.
+  // OMNIROUTE_TOOL_GUARD=0 turns all of it off (ops escape hatch).
+  const needsTools = process.env.OMNIROUTE_TOOL_GUARD !== "0" && req.stream && requestHasTools(req.body);
+  const toolKey = needsTools ? requestKey(req.body) : "";
+  let planned: TargetRow[] | null = null;
+  if (needsTools && needsToolPlanning(toolKey)) {
+    // nextTarget() only advances this cursor's in-memory "tried" sets, so
+    // reading ahead to reorder is safe. Bounded: the pool is ~20 models.
+    const all: TargetRow[] = [];
+    for (let t = iterator.nextTarget(); t && all.length < 64; t = iterator.nextTarget()) all.push(t);
+    planned = planToolTargets(all, toolKey);
+    log.info(
+      "thin-gateway",
+      `retry of a dropped tool call planned: ${[...new Set(planned.map((t) => t.modelStr))].slice(0, 3).join(" → ")}`
+    );
+  }
+  const guard = (response: Response, modelStr: string) =>
+    needsTools ? withToolCallGuard(response, modelStr, toolKey) : response;
 
   while (Date.now() - startTime < TOTAL_BUDGET_MS) {
-    const target = iterator.nextTarget();
+    const target = planned ? (planned.shift() ?? null) : iterator.nextTarget();
     if (!target) {
       // All targets exhausted — trigger provisioner for both tried providers
       // AND rate-limited credentialed providers (which were never attempted).
       const providersToProvision = new Set(iterator.triedProviders);
       // Query SQLite for rate-limited credentialed providers
       try {
-        const { getDbInstance } = await import("../../lib/db/core.ts");
-        const db = getDbInstance();
-        const rateLimited = db
-          .prepare(
-            `SELECT DISTINCT provider FROM provider_connections
-             WHERE is_active = 1 AND rate_limited_until IS NOT NULL`
-          )
-          .all() as Array<{ provider: string }>;
-        for (const { provider } of rateLimited) {
+        for (const provider of await store.rateLimitedProviders()) {
           if (!SKIP_PROVIDERS.has(provider)) providersToProvision.add(provider);
         }
       } catch {
-        // ignore DB errors
+        // ignore store errors
       }
 
       if (providersToProvision.size > 0) {
-        console.log(
-          `[thin-gateway] All targets exhausted (${attempts} attempts) — triggering provisioner for: ${[...providersToProvision].join(", ")}`
-        );
+        // Only wait if replenishment is ACTUALLY under way. Previously this
+        // slept PROVISIONER_WAIT_MS (30s) unconditionally — half of the 60s
+        // TOTAL_BUDGET_MS — even when every single trigger was a no-op because
+        // the provider was inside its 30s cooldown, blacklisted, or already
+        // in flight. Across 4,748 exhaustion events that is up to 30s of held
+        // connection per request buying nothing, and it is why an exhaustion
+        // storm looked like the provisioner being "throttled out": the storm
+        // did trigger replenishment once, then every subsequent request in the
+        // cooldown window paid the full sleep for a trigger that never fired.
+        const started: string[] = [];
+        const suppressed: string[] = [];
         for (const provider of providersToProvision) {
-          triggerProviderProvisioning(provider);
+          const outcome = triggerProviderProvisioning(provider);
+          (isProvisioningUnderway(outcome) ? started : suppressed).push(`${provider}:${outcome}`);
         }
-        // Wait briefly for provisioner to produce a new key
-        await new Promise((resolve) => setTimeout(resolve, PROVISIONER_WAIT_MS));
+        log.info(
+          "thin-gateway",
+          `All targets exhausted (${attempts} attempts) — provisioning underway for [${started.join(", ") || "none"}]` +
+            (suppressed.length ? `; suppressed [${suppressed.join(", ")}]` : "")
+        );
+
+        if (started.length === 0) {
+          // Nothing is being provisioned, so no new key can arrive. Waiting is
+          // pure latency. Fall through to the 503 immediately.
+          break;
+        }
+
+        // Wait for the provisioner to produce a new key — but never past the
+        // request's own budget, and never longer than the remaining budget.
+        const remainingBudget = TOTAL_BUDGET_MS - (Date.now() - startTime);
+        const waitMs = Math.min(PROVISIONER_WAIT_MS, Math.max(0, remainingBudget));
+        if (waitMs <= 0) break;
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
         // Try once more with fresh iterator (new keys may have been inserted).
         // The pin MUST be carried over: this path used to drop
         // specificProvider/specificModel, so a request for `cohere/command-a`
         // whose cohere targets were exhausted came back answered by
         // dahl/MiniMax — a different provider and a different model than the
         // caller asked for, reported as a success.
-        const freshIter = new TargetIterator({
+        const freshIter = store.createTargetCursor({
           freeProvidersOnly: isFreeOnly,
           specificProvider,
           specificModel,
           promptTokens,
           outputTokens,
+          reservedFor: reservedAlias,
         });
         const freshTarget = freshIter.nextTarget();
         if (freshTarget) {
           const result = await tryTarget(freshTarget, req, registry);
           if (result.ok) {
             freshIter.markSucceeded(freshTarget.connectionId);
-            return result.response;
+            return guard(result.response, freshTarget.modelStr);
           }
         }
       }
@@ -230,33 +425,92 @@ export async function handleThinGateway(req: GatewayRequest): Promise<Response> 
     }
 
     attempts++;
-    console.log(
-      `[thin-gateway] Attempt ${attempts}: ${target.modelStr} conn=${target.connectionId.slice(0, 8)}`
+    log.debug(
+      "thin-gateway",
+      `Attempt ${attempts}: ${target.modelStr} conn=${target.connectionId.slice(0, 8)}`
     );
     const result = await tryTarget(target, req, registry);
     if (result.ok) {
-      console.log(`[thin-gateway] ✓ ${target.modelStr} succeeded`);
+      log.debug("thin-gateway", `✓ ${target.modelStr} succeeded`);
       iterator.markSucceeded(target.connectionId);
-      return result.response;
+      return guard(result.response, target.modelStr);
     }
 
-    console.log(
-      `[thin-gateway] ✗ ${target.modelStr} failed: ${result.status} ${result.message.slice(0, 80)}`
+    // TS doesn't narrow literal-true/false unions after `if (result.ok) return`
+    // in this config, so narrow manually with a type guard.
+    const fail = result as { ok: false; status: number; message: string }
+    const failStatus = fail.status
+    const failMessage = fail.message
+
+    log.debug(
+      "thin-gateway",
+      `✗ ${target.modelStr} failed: ${failStatus} ${failMessage.slice(0, 80)}`
     );
-    errors.push({ model: target.modelStr, status: result.status, message: result.message });
+    errors.push({ model: target.modelStr, status: failStatus, message: failMessage });
 
     // A prompt-too-large refusal is a fact about this model, not this moment.
     // Record it so the same model is not offered the same size again.
-    if (isTokenRefusal(result.status, result.message) && promptTokens > 0) {
+    if (isTokenRefusal(failStatus, failMessage) && promptTokens > 0) {
       try {
-        const { getDbInstance } = await import("../../lib/db/core.ts");
-        recordTokenRefusal(getDbInstance(), target.modelStr, promptTokens);
+        await store.recordTokenRefusal(target.modelStr, promptTokens);
       } catch {
         // Learning is an optimisation, never a failure path.
       }
     }
 
-    iterator.markFailed(target.connectionId, result.status, RATE_LIMIT_COOLDOWN_MS);
+    // "invalid request: model 'X'" is a fact about the model too, and a
+    // permanent one — X is not a chat model and never will be. refusalReason()
+    // has always CLASSIFIED this as "model cannot chat", but the classification
+    // only decorated the final error message; the target stayed in the pool and
+    // was offered again next request. Measured: 8,913 identical 400s for
+    // cohere/cohere-transcribe-03-2026, a speech-to-text model that discovery
+    // imported into the chat catalogue. Record it so it is never offered again.
+    if (isModelIncapableRefusal(failStatus, failMessage)) {
+      try {
+        await store.recordModelIncapable(target.modelStr, failMessage.slice(0, 200));
+        log.info(
+          "thin-gateway",
+          `${target.modelStr} permanently retired from the chat pool: upstream says it cannot chat`
+        );
+      } catch {
+        // Learning is an optimisation, never a failure path.
+      }
+    }
+
+    iterator.markFailed(target.connectionId, failStatus, rateLimitCooldown(target.provider));
+
+    // A 402 (insufficient credits) or 401/403 (auth rejected) means the
+    // account is permanently dead — not rate-limited. Ask the provisioner to
+    // forget it and re-provision a replacement. The LOCAL retirement of this
+    // credential already happened above, inside iterator.markFailed(); this
+    // call only reaches the external provisioner.
+    //
+    // The outcome is no longer discarded. `.catch(() => {})` here meant a
+    // provisioner that answered 500 — or was not running at all — looked
+    // exactly like a successful delete, so a credential OmniRoute had given up
+    // on kept being re-issued with nobody able to see why.
+    if ((failStatus === 402 || failStatus === 401 || failStatus === 403) && target.apiKey) {
+      void deleteProvisionerAccount(target.provider, target.apiKey, target.connectionId).then(
+        (outcome) => {
+          if (!outcome.ok) {
+            log.warn(
+              "thin-gateway",
+              `Provisioner still holds dead credential ${target.provider} conn=${target.connectionId}: ` +
+                `${outcome.reason} after ${outcome.attempts} attempt(s)`
+            );
+          }
+        },
+        (err: unknown) => {
+          // deleteProvisionerAccount already handles its own errors; this guard
+          // exists so an unexpected throw cannot become an unhandled rejection.
+          log.warn(
+            "thin-gateway",
+            `Provisioner delete threw for ${target.provider} conn=${target.connectionId}: ` +
+              (err instanceof Error ? err.message : "unknown")
+          );
+        }
+      );
+    }
 
     // Client disconnect check
     if (req.signal?.aborted) {
@@ -279,10 +533,38 @@ export async function handleThinGateway(req: GatewayRequest): Promise<Response> 
     attempts === 0
       ? " | no candidate model was eligible — every free target is cooling down, out of quota, or too small for this prompt"
       : "";
-  return errorResponse(
-    503,
+  // Upstream exhaustion, NOT local backpressure. This used to be a bare 503
+  // with Retry-After: 5 — byte-identical to the admission controller's refusal,
+  // so a client could not tell "OmniRoute is busy, back off" from "every
+  // provider is dead, backing off changes nothing". See failureDomain.ts for
+  // the status choice (502) and the machine-readable discriminator.
+  return failureResponse(
+    attempts === 0 ? "upstream_no_eligible_target" : "upstream_pool_exhausted",
     `All providers exhausted after ${attempts} attempts (${elapsed}ms)${sized} | tried: ${summary}${overflowed}${nothingTried}`
   );
+}
+
+/**
+ * Watch a streamed tool response for a swallowed call. On a drop the stream
+ * ends with an error event (the client retries) and the model cools down for
+ * tool requests, so that retry is routed to a different upstream.
+ */
+function withToolCallGuard(response: Response, modelStr: string, toolKey: string): Response {
+  if (!response.body) return response;
+  const body = guardToolCallStream(response.body, {
+    modelStr,
+    onToolCall: () => recordToolOutcome(modelStr, "tool"),
+    onProse: () => recordToolOutcome(modelStr, "prose"),
+    onDrop: (emptyRun) => {
+      recordToolOutcome(modelStr, "drop", toolKey);
+      log.warn(
+        "thin-gateway",
+        `${modelStr} dropped a tool call (${emptyRun} empty deltas) — stream cut; ` +
+          `the client's retry may move to a model with a better tool success rate`
+      );
+    },
+  });
+  return new Response(body, { status: response.status, headers: response.headers });
 }
 
 /**
@@ -312,12 +594,18 @@ async function tryTarget(
   }
 
   const providerEntry = registryEntry;
-  if (!providerEntry) {
-    return { ok: false, status: 400, message: `Unknown provider: ${target.provider}` };
-  }
 
-  const baseUrl = providerEntry.baseUrl || providerEntry.baseUrls?.[0];
+  // Resolve the upstream base URL. Local providers (vllm, ollama-local,
+  // lm-studio, llama-cpp, …) are NOT in the OpenSSE routing REGISTRY — they
+  // live in LOCAL_PROVIDERS for the dashboard. Each connection carries its own
+  // upstream URL in `provider_specific_data.baseUrl`, which the TargetIterator
+  // surfaces as `target.baseUrl`. Prefer the connection-specific URL over the
+  // registry's so a local provider routes even when no registry entry exists.
+  const baseUrl = target.baseUrl || providerEntry?.baseUrl || providerEntry?.baseUrls?.[0];
   if (!baseUrl) {
+    if (!providerEntry) {
+      return { ok: false, status: 400, message: `Unknown provider: ${target.provider}` };
+    }
     return { ok: false, status: 400, message: `No baseUrl for provider: ${target.provider}` };
   }
 
@@ -358,13 +646,16 @@ async function tryTarget(
   // For "optional" authType, skip Authorization — use keyless access.
   // For "apikey" authType, send Bearer token (or X-API-Key if authHeader specifies it).
   // For "none" authType, never send Authorization.
-  if (target.apiKey && providerEntry.authType === "apikey") {
-    if (providerEntry.authHeader === "x-api-key") {
+  // When providerEntry is absent (local providers not in the routing REGISTRY),
+  // fall back to Bearer if an API key was stored on the connection.
+  const authType = providerEntry?.authType;
+  if (target.apiKey && authType === "apikey") {
+    if (providerEntry?.authHeader === "x-api-key") {
       headers["X-API-Key"] = target.apiKey;
     } else {
       headers["Authorization"] = `Bearer ${target.apiKey}`;
     }
-  } else if (target.apiKey && !providerEntry.authType && providerEntry.authType !== "none") {
+  } else if (target.apiKey && !authType && authType !== "none") {
     // Default: send Bearer if authType is undefined (backwards compat)
     headers["Authorization"] = `Bearer ${target.apiKey}`;
   }
