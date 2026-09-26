@@ -462,20 +462,67 @@ export async function purgeQuotaSnapshots(): Promise<CleanupResult> {
 }
 
 /**
- * Purge ALL call_logs immediately (no retention check).
+ * How many of the most recent call_logs rows a purge must preserve.
+ *
+ * `0` (the default) keeps the historical behaviour: an operator who explicitly
+ * asks to purge request history gets an empty table. Setting
+ * `CALL_LOGS_PURGE_KEEP_RECENT` to a positive number turns every purge into a
+ * bounded-window trim instead, so the router can never be left with **zero**
+ * request-level telemetry — which is exactly the state this incident had to be
+ * reconstructed around, from a 54 MB text log, because no request history
+ * existed for the running engine.
  */
-export async function purgeCallLogs(): Promise<CleanupResult> {
+export function getCallLogPurgeKeepRecent(): number {
+  const raw = process.env.CALL_LOGS_PURGE_KEEP_RECENT;
+  if (raw === undefined) return 0;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+/**
+ * Purge call_logs, optionally retaining a bounded window of the most recent rows.
+ *
+ * @param opts.keepRecent  Rows to preserve, newest first. Defaults to
+ *                         `CALL_LOGS_PURGE_KEEP_RECENT` (0 = purge everything).
+ *                         When > 0, the artifact directory is left alone,
+ *                         because the retained rows still reference artifacts in
+ *                         it and wiping it would orphan them.
+ */
+export async function purgeCallLogs(
+  opts: { keepRecent?: number } = {}
+): Promise<CleanupResult> {
   const db = getDbInstance();
+  const keepRecent = opts.keepRecent ?? getCallLogPurgeKeepRecent();
   const result: CleanupResult = { deleted: 0, deletedArtifacts: 0, errors: 0 };
 
   try {
-    const runResult = db.prepare("DELETE FROM call_logs").run();
-    result.deleted = runResult.changes;
-
-    console.log(`[Cleanup] Purged ${result.deleted} call_logs`);
+    if (keepRecent > 0) {
+      // Bounded window: delete everything EXCEPT the newest `keepRecent` rows.
+      const runResult = db
+        .prepare(
+          `DELETE FROM call_logs
+           WHERE id NOT IN (
+             SELECT id FROM call_logs ORDER BY timestamp DESC LIMIT ?
+           )`
+        )
+        .run(keepRecent);
+      result.deleted = runResult.changes;
+      console.log(
+        `[Cleanup] Trimmed ${result.deleted} call_logs, retaining the ${keepRecent} most recent`
+      );
+    } else {
+      const runResult = db.prepare("DELETE FROM call_logs").run();
+      result.deleted = runResult.changes;
+      console.log(`[Cleanup] Purged ${result.deleted} call_logs`);
+    }
   } catch (err: unknown) {
     console.error("[Cleanup] Error purging call_logs:", err);
     result.errors++;
+  }
+
+  if (keepRecent > 0) {
+    // Retained rows still point at artifacts on disk — do not wipe the directory.
+    return result;
   }
 
   const artifactResult = purgeCallLogArtifactDirectory();

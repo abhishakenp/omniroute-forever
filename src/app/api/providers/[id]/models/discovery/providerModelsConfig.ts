@@ -672,7 +672,27 @@ export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> =
     headers: { "Content-Type": "application/json" },
     authHeader: "Authorization",
     authPrefix: "Bearer ",
-    parseResponse: (data) => data.data || data.models || [],
+    // Cohere's /v2/models returns EVERY model with an `endpoints` array telling
+    // you what it can actually do: "chat", "embed", "rerank", "classify",
+    // "transcribe". That array used to be discarded, so speech-to-text and
+    // embedding models were imported straight into the chat catalogue and then
+    // offered to chat requests. Measured: 8,913 identical
+    // `400 invalid request: model 'cohere-transcribe-03-2026'` — a transcription
+    // model, asked to hold a conversation, ~9k times.
+    //
+    // Keep only models that declare the chat endpoint. A model that does not
+    // publish `endpoints` at all is kept, because absence is not a denial and
+    // silently dropping the catalogue on a response-shape change would be worse
+    // than the bug being fixed.
+    parseResponse: (data) => {
+      const rows = data.data || data.models || [];
+      if (!Array.isArray(rows)) return [];
+      return rows.filter((m) => {
+        const endpoints = (m as { endpoints?: unknown })?.endpoints;
+        if (!Array.isArray(endpoints)) return true;
+        return endpoints.some((e) => String(e).toLowerCase() === "chat");
+      });
+    },
   },
   nvidia: {
     url: "https://integrate.api.nvidia.com/v1/models",
